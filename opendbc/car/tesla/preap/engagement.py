@@ -109,6 +109,22 @@ class PreAPEngagement:
         self.longCtrlEvent = "pccDisabled"
     self.preap_brake_pressed_prev = real_brake_pressed
 
+    # Auto-update target speed when speed limit changes while driving
+    if use_pedal and self.enableLongControl:
+      try:
+        import os
+        if os.path.exists("/dev/shm/mpp_speed_limit"):
+          with open("/dev/shm/mpp_speed_limit", "r") as f:
+            val = f.read().strip()
+            limit_mps = float(val) if val else 0.0
+            if limit_mps > 0:
+              if not hasattr(self, "last_mpp_limit_mps"): self.last_mpp_limit_mps = 0.0
+              if limit_mps != self.last_mpp_limit_mps:
+                self.last_mpp_limit_mps = limit_mps
+                self.pedal_speed_kph = round((limit_mps * 2.236936 + 3.0) * 1.609344, 1)
+      except Exception:
+        pass
+
     return button_events
 
   def check_can_engage(self, door_open, gear_shifter, seatbelt_unlatched):
@@ -241,6 +257,17 @@ class PreAPEngagement:
 
   @staticmethod
   def _capture_target_speed(v_ego, speed_units):
+    try:
+      import os
+      if os.path.exists("/dev/shm/mpp_speed_limit"):
+        with open("/dev/shm/mpp_speed_limit", "r") as f:
+          val = f.read().strip()
+          limit_mps = float(val) if val else 0.0
+          if limit_mps > 0:
+            target_kph = (limit_mps * 2.236936 + 3.0) * 1.609344
+            return round(target_kph, 1)
+    except Exception:
+      pass
     speed_uom_kph = CV.MPH_TO_KPH if speed_units == "MPH" else 1.0
     current_speed_kph = int(v_ego * CV.MS_TO_KPH / speed_uom_kph + 0.5) * speed_uom_kph
     return max(current_speed_kph, 0.0)
