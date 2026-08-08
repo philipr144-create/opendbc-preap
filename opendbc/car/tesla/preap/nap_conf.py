@@ -43,7 +43,7 @@ PEDAL_DI_ZERO = 0       # Neutral
 PEDAL_DI_PRESSED = 2    # "pedal pressed" threshold
 
 ACCEL_MAX = 2.5         # m/s^2
-REGEN_MAX = -1.5        # m/s^2
+REGEN_MAX = -2.5        # m/s^2
 PEDAL_HYST_GAP = 1.0
 
 # Speed-dependent max pedal (m/s breakpoints)
