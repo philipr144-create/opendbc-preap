@@ -58,9 +58,12 @@ PEDAL_MAX_VALUES = [50., 58., 66., 74., 82., 90.]
 # Planner acceleration envelopes by personality
 ACCEL_LOOKUP_BP = [0.0, 1.3, 7.5, 15.0, 25.0, 40.0]  # m/s
 ACCEL_MAX_PROFILES = {
-  'Chill': [0.15, 0.35, 0.45, 0.35, 0.3, 0.25],  # Rain-safe softened profile
-  'Standard': [0.3, 0.9, 1.2, 1.0, 0.8, 0.6],
-  'MadMax': [0.3, 1.6, 1.9, 1.5, 1.2, 1.0],
+  # 1. Chill: Gentle rain / traffic mode (slowest)
+  'Chill': [0.15, 0.4, 0.5, 0.4, 0.3, 0.25],
+  # 2. Standard: Balanced daily driver mode (middle ground)
+  'Standard': [0.22, 0.65, 0.85, 0.7, 0.55, 0.45],
+  # 3. MadMax: Maximum performance / fastest response (starts at 0.3)
+  'MadMax': [0.3, 0.9, 1.2, 1.0, 0.8, 0.6],
 }
 ACCEL_MAX_DEFAULT = ACCEL_MAX_PROFILES['Chill']
 
