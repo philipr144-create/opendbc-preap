@@ -58,7 +58,7 @@ PEDAL_MAX_VALUES = [50., 58., 66., 74., 82., 90.]
 # Planner acceleration envelopes by personality
 ACCEL_LOOKUP_BP = [0.0, 1.3, 7.5, 15.0, 25.0, 40.0]  # m/s
 ACCEL_MAX_PROFILES = {
-  'Chill': [0.3, 0.7, 0.9, 0.7, 0.6, 0.5],
+  'Chill': [0.15, 0.35, 0.45, 0.35, 0.3, 0.25],  # Rain-safe softened profile
   'Standard': [0.3, 0.9, 1.2, 1.0, 0.8, 0.6],
   'MadMax': [0.3, 1.6, 1.9, 1.5, 1.2, 1.0],
 }
