@@ -55,7 +55,13 @@ class CarController(CarControllerBase):
     lat_active = CC.latActive and CS.hands_on_level < 3
 
     if self.frame % 2 == 0:
-      self.apply_angle_last = apply_steer_angle_limits_vm(actuators.steeringAngleDeg, self.apply_angle_last, CS.out.vEgoRaw, CS.out.steeringAngleDeg,
+      try:
+        auto_res = __import__("json").load(open("/data/nap_settings.json")).get("auto_resume", False)
+      except:
+        auto_res = False
+
+      target_angle = CS.out.steeringAngleDeg if ((CS.out.steeringPressed or getattr(CS, "hands_on_level", 0) >= 3) and auto_res) else actuators.steeringAngleDeg
+      self.apply_angle_last = apply_steer_angle_limits_vm(target_angle, self.apply_angle_last, CS.out.vEgoRaw, CS.out.steeringAngleDeg,
                                                           lat_active, CarControllerParams, self.VM)
       if self.CP.carFingerprint in LEGACY_CARS:
         cntr = (self.frame // 2) % 16
@@ -96,7 +102,13 @@ class CarController(CarControllerBase):
     lat_active = CC.latActive and CS.hands_on_level < 3
 
     if self.frame % 2 == 0:
-      self.apply_angle_last = apply_steer_angle_limits_vm(actuators.steeringAngleDeg, self.apply_angle_last, CS.out.vEgoRaw, CS.out.steeringAngleDeg,
+      try:
+        auto_res = __import__("json").load(open("/data/nap_settings.json")).get("auto_resume", False)
+      except:
+        auto_res = False
+
+      target_angle = CS.out.steeringAngleDeg if ((CS.out.steeringPressed or getattr(CS, "hands_on_level", 0) >= 3) and auto_res) else actuators.steeringAngleDeg
+      self.apply_angle_last = apply_steer_angle_limits_vm(target_angle, self.apply_angle_last, CS.out.vEgoRaw, CS.out.steeringAngleDeg,
                                                           lat_active, CarControllerParams, self.VM)
       cntr = (self.frame // 2) % 16
       can_sends.append(self.tesla_can.create_steering_control(cntr, self.apply_angle_last, lat_active))

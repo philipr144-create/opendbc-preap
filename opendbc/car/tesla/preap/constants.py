@@ -10,15 +10,15 @@
 ACCEL_PREAP_BP = [0.0, 1.3, 7.5, 15.0, 25.0, 40.0]  # m/s
 #                  0    3    17    33    56    90  mph
 ACCEL_PREAP_PROFILES = {
-  0: [0.3, 0.8, 1.1, 1.0, 0.85, 0.7],   # aggressive
-  1: [0.3, 0.7, 1.0, 0.9, 0.8, 0.65],   # standard
-  2: [0.3, 0.6, 0.9, 0.8, 0.7, 0.55],    # relaxed (former standard values)
+  0: [0.4, 0.8, 1.1, 1.0, 0.85, 0.7],   # aggressive
+  1: [0.3, 0.5, 0.8, 0.75, 0.7, 0.65],   # standard
+  2: [0.2, 0.3, 0.55, 0.65, 0.65, 0.55],    # relaxed (ultra-soft launch)    # relaxed (softened for smooth daily driving)    # relaxed (former standard values)
 }
 
 # When following a lead car, cap positive accel to these values regardless
 # of personality. Prevents overshoot → regen → overshoot oscillation.
 # Open road uses the full profile above; this only limits follow mode.
-ACCEL_PREAP_FOLLOW = [0.3, 0.6, 0.9, 0.8, 0.7, 0.55]
+ACCEL_PREAP_FOLLOW = [0.25, 0.4, 0.55, 0.5, 0.4, 0.3]
 
 # Feedforward-dominant longitudinal tune (FrogPilot/OPGM Bolt-inspired).
 # kp=0: no proportional term — eliminates aEgo sensor noise amplification.

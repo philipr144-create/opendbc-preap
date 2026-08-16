@@ -121,7 +121,7 @@ class PreAPEngagement:
               if not hasattr(self, "last_mpp_limit_mps"): self.last_mpp_limit_mps = 0.0
               if limit_mps != self.last_mpp_limit_mps:
                 self.last_mpp_limit_mps = limit_mps
-                self.pedal_speed_kph = round((limit_mps * 2.236936 + 3.0) * 1.609344, 1)
+                self.pedal_speed_kph = round((limit_mps * 2.236936) * 1.609344, 1)
       except Exception:
         pass
 
@@ -264,7 +264,7 @@ class PreAPEngagement:
           val = f.read().strip()
           limit_mps = float(val) if val else 0.0
           if limit_mps > 0:
-            target_kph = (limit_mps * 2.236936 + 3.0) * 1.609344
+            target_kph = (limit_mps * 2.236936) * 1.609344
             return round(target_kph, 1)
     except Exception:
       pass

@@ -64,7 +64,7 @@ def update_preap(cs, can_parsers):
     "EAC_ERROR_HIGH_ANGLE_REQ", "EAC_ERROR_HIGH_ANGLE_RATE_REQ",
     "EAC_ERROR_HIGH_ANGLE_SAFETY", "EAC_ERROR_HIGH_ANGLE_RATE_SAFETY",
   )
-  ret.steeringDisengage = cs.hands_on_level >= 3 or epas_rejecting
+  ret.steeringDisengage = epas_rejecting
   cs.engagement.handle_steering_disengage(ret.steeringDisengage)
 
   # Cruise state
@@ -171,6 +171,16 @@ def update_preap(cs, can_parsers):
     and cs.di_cruise_state not in ("STANDBY", "ENABLED")
   )
   ret.pedalLongActive = cs.enableLongControl and nap_conf.use_pedal
+
+
+  # NAP Dashboard: Instant Speed Offset & Trim Override
+  try:
+    _sett = __import__('json').load(open('/data/nap_settings.json'))
+    _off = 5.0 if _sett.get('speed_offset', False) else 0.0
+    _trim = float(_sett.get('speed_trim', 0.0))
+    ret.cruiseState.speed += ((_off + _trim) * CV.MPH_TO_MS)
+  except:
+    pass
 
   return ret
 
