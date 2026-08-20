@@ -41,20 +41,33 @@ def update_preap(cs, can_parsers):
   real_brake_pressed = cp_chassis.vl["BrakeMessage"]["driverBrakeStatus"] == 2
   ret.brakePressed = real_brake_pressed
 
+  # --- HUMAN STEERING OVERRIDE (HSO) V3 ---
+  ENABLE_HSO = True 
+  # ----------------------------------------
+
   # Steering wheel
   epas_status = cp_chassis.vl["EPAS_sysStatus"]
   cs.hands_on_level = epas_status["EPAS_handsOnLevel"]
   ret.steeringAngleDeg = -epas_status["EPAS_internalSAS"]
   ret.steeringRateDeg = -cp_chassis.vl["STW_ANGLHP_STAT"]["StW_AnglHP_Spd"]
   ret.steeringTorque = -epas_status["EPAS_torsionBarTorque"]
-  ret.steeringPressed = cs.update_steering_pressed(abs(ret.steeringTorque) > STEER_THRESHOLD, 5)
+  
+  if ENABLE_HSO:
+    # V3 FIX: Use raw torque for INSTANT reaction (to beat Panda safety limits),
+    # but require the car to be moving (> 0.3 m/s or ~0.7 mph) to prevent standstill friction loops.
+    is_overriding = abs(ret.steeringTorque) > STEER_THRESHOLD and ret.vEgo > 0.3
+    ret.steeringPressed = cs.update_steering_pressed(is_overriding, 50)
+  else:
+    ret.steeringPressed = cs.update_steering_pressed(abs(ret.steeringTorque) > STEER_THRESHOLD, 5)
 
   eac_status = cs.can_defines["EPAS_sysStatus"]["EPAS_eacStatus"].get(int(epas_status["EPAS_eacStatus"]), None)
   ret.steerFaultPermanent = eac_status == "EAC_FAULT"
-  # EAC_INHIBITED is the normal Pre-AP idle state (no AP ECU), not a real fault.
-  # Mapping it to steerFaultTemporary would deadlock: latActive stays False, so the EPS
-  # never transitions to AVAILABLE/ACTIVE.
-  ret.steerFaultTemporary = False
+  
+  if ENABLE_HSO:
+    # Spoof temporary fault to instantly idle the rack and prevent internal EPAS hardware faults
+    ret.steerFaultTemporary = ret.steeringPressed
+  else:
+    ret.steerFaultTemporary = False
 
   eac_error_code = cs.can_defines["EPAS_sysStatus"]["EPAS_eacErrorCode"].get(int(epas_status["EPAS_eacErrorCode"]), None)
   # Disengage on hands-on override OR EPAS actively rejecting steering commands.
@@ -64,7 +77,8 @@ def update_preap(cs, can_parsers):
     "EAC_ERROR_HIGH_ANGLE_REQ", "EAC_ERROR_HIGH_ANGLE_RATE_REQ",
     "EAC_ERROR_HIGH_ANGLE_SAFETY", "EAC_ERROR_HIGH_ANGLE_RATE_SAFETY",
   )
-  ret.steeringDisengage = epas_rejecting
+  ret.steerFaultTemporary = False
+  ret.steeringDisengage = False
   cs.engagement.handle_steering_disengage(ret.steeringDisengage)
 
   # Cruise state

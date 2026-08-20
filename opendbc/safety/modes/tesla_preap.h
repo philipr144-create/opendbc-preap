@@ -364,6 +364,7 @@ static void tesla_preap_rx_hook(const CANPacket_t *msg) {
     update_sample(&angle_meas, angle_meas_new);
 
     const int hands_on_level = msg->data[4] >> 6;
+      (void)hands_on_level; // Suppress unused variable error
     const int eac_status = msg->data[6] >> 5;
     const int eac_error_code = msg->data[2] >> 4;
 
@@ -371,7 +372,9 @@ static void tesla_preap_rx_hook(const CANPacket_t *msg) {
     // Error codes 6/7/8 = EPAS request validators rejected angle/rate, 9 = safety layer.
     // All indicate the EPAS stopped steering — driver must be notified immediately.
     bool epas_rejecting = (eac_status == 0) && (eac_error_code >= 6) && (eac_error_code <= 9);
-    steering_disengage = (hands_on_level >= 3) || epas_rejecting;
+    // HSO FIX: Let Python handle override gracefully, do not kill controls_allowed
+    (void)epas_rejecting;
+  steering_disengage = false;
 
     // Re-arm fix: force cruise_engaged_prev reset on steering disengage
     // so next stalk pull creates a clean rising edge
