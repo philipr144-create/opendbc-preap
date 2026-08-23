@@ -100,20 +100,18 @@ class GradeEstimator:
 
 
 class JerkLimiter:
-  """S-curve rate limiter on acceleration commands.
+  """Asymmetric S-curve rate limiter on acceleration commands."""
 
-  Bounds the rate of change of acceleration (jerk) to j_max,
-  preventing discontinuous inputs from reaching the pedal controller.
-  """
-
-  def __init__(self, j_max: float = 2.5, dt: float = 0.02):
-    self.j_max = j_max
+  def __init__(self, j_pos_max: float = 2.5, j_neg_max: float = 5.0, dt: float = 0.02):
+    self.j_pos_max = j_pos_max
+    self.j_neg_max = j_neg_max
     self.dt = dt
     self.a_limited = 0.0
 
   def update(self, a_cmd: float) -> float:
-    da_max = self.j_max * self.dt
-    self.a_limited += float(clip(a_cmd - self.a_limited, -da_max, da_max))
+    da_pos = self.j_pos_max * self.dt
+    da_neg = self.j_neg_max * self.dt
+    self.a_limited += float(clip(a_cmd - self.a_limited, -da_neg, da_pos))
     return self.a_limited
 
   def reset(self, a_init: float = 0.0):
@@ -184,7 +182,7 @@ class VirtualDAS:
 
   def __init__(self, dt: float = 0.02):
     self.dt = dt
-    self.jerk_limiter = JerkLimiter(j_max=2.5, dt=dt)
+    self.jerk_limiter = JerkLimiter(j_pos_max=2.5, j_neg_max=5.0, dt=dt)
     self.ff_model = FeedforwardModel()
     self.grade_estimator = GradeEstimator(dt=dt)
     self.prev_pedal_di = 0.0
