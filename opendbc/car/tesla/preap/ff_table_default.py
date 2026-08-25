@@ -13,7 +13,7 @@ Zero-torque offset is applied at runtime (not baked into the table).
 SPEED_BP = [0.0, 5.0, 12.0, 20.0, 30.0, 40.0]
 
 # Acceleration breakpoints (m/s²) — from REGEN_MAX to ACCEL_MAX
-ACCEL_BP = [-1.5, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5, 2.0, 2.5]
+ACCEL_BP = [-2.5, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5, 2.0, 2.5]
 
 # pedal_di values: DEFAULT_TABLE[speed_idx][accel_idx]
 # Computed from: interp(accel, [REGEN_MAX, 0, ACCEL_MAX], [DI_MIN, 0, max_pedal])
@@ -21,7 +21,7 @@ ACCEL_BP = [-1.5, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5, 2.0, 2.5]
 # and zero_torque_di = 0 (applied as offset at runtime)
 #
 # Each row is a speed, each column is an accel request.
-#         -1.5   -1.0   -0.5    0.0    0.5    1.0    1.5    2.0    2.5
+#         -2.5   -1.0   -0.5    0.0    0.5    1.0    1.5    2.0    2.5
 DEFAULT_TABLE = [
     [-5.00, -4.00, -2.67,  0.00, 10.00, 20.00, 30.00, 40.00, 50.00],  # 0 m/s
     [-5.00, -4.00, -2.67,  0.00, 11.60, 23.20, 34.80, 46.40, 58.00],  # 5 m/s
