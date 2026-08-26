@@ -21,7 +21,7 @@ def init_preap_can(dbc_names, packers):
 # Grace period after engage: ramp accel limit from 0 → full over this window.
 # Prevents both regen spike (negative) and pedal stab (MPC requesting high
 # positive accel on frame 1). Inspired by Tinkla's proportional ramp.
-ENGAGE_GRACE_FRAMES = 50  # 0.5s at 100Hz
+ENGAGE_GRACE_FRAMES = 10  # 0.5s at 100Hz
 
 
 class PreAPLongController:
