@@ -97,7 +97,12 @@ class CarController(CarControllerBase):
       self.hso_timer = 0
 
     # Instantly detect ANY touch (> 0) to yield before EPAS can fight you
-    driver_pulling = CS.out.steeringPressed or getattr(CS, "hands_on_level", 0) > 0
+    blinker_on = CS.out.leftBlinker or CS.out.rightBlinker
+    if blinker_on:
+        # Ignore tire resistance during active turns/lane changes; require intentional force
+        driver_pulling = abs(CS.out.steeringTorque) > 3.0 or getattr(CS, "hands_on_level", 0) >= 3
+    else:
+        driver_pulling = CS.out.steeringPressed or getattr(CS, "hands_on_level", 0) >= 3
     if driver_pulling:
       self.hso_timer = 50
         
