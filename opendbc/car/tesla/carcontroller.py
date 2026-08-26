@@ -99,8 +99,9 @@ class CarController(CarControllerBase):
     # Instantly detect ANY touch (> 0) to yield before EPAS can fight you
     blinker_on = CS.out.leftBlinker or CS.out.rightBlinker
     if blinker_on:
-        # Ignore tire resistance during active turns/lane changes; require intentional force
-        driver_pulling = abs(CS.out.steeringTorque) > 3.0 or getattr(CS, "hands_on_level", 0) >= 3
+        # Allow light nudges (0.8 - 2.5 Nm) to confirm lane changes without dropping lat_active.
+        # Only trip HSO if the driver firmly resists or swerves (> 2.5 Nm).
+        driver_pulling = abs(CS.out.steeringTorque) > 2.5 or getattr(CS, "hands_on_level", 0) >= 3
     else:
         driver_pulling = CS.out.steeringPressed or getattr(CS, "hands_on_level", 0) >= 3
     if driver_pulling:
