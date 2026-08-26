@@ -184,7 +184,7 @@ class CarControllerParams:
     MAX_LATERAL_JERK=3.0 + (ACCELERATION_DUE_TO_GRAVITY * AVERAGE_ROAD_ROLL),  # ~3.6 m/s^3
 
     # limit angle rate to both prevent a fault and for low speed comfort (~12 mph rate down to 0 mph)
-    MAX_ANGLE_RATE=5,  # deg/20ms frame, EPS faults at 12 at a standstill
+    MAX_ANGLE_RATE=7,  # deg/20ms frame (~350 deg/s, EPS faults at 12)  # deg/20ms frame, EPS faults at 12 at a standstill
   )
 
   STEER_STEP = 2  # Angle command is sent at 50 Hz
