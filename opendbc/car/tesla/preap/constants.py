@@ -19,7 +19,7 @@ ACCEL_PREAP_PROFILES = {
 # of personality. Prevents overshoot → regen → overshoot oscillation.
 # Open road uses the full profile above; this only limits follow mode.
 # PREAP_MPC_LEAD_CAP_V1
-ACCEL_PREAP_FOLLOW = [0.25, 0.4, 0.55, 0.5, 0.4, 0.3]
+ACCEL_PREAP_FOLLOW = [0.9, 1.1, 0.9, 0.6, 0.45, 0.35]
 
 # Feedforward-dominant longitudinal tune (FrogPilot/OPGM Bolt-inspired).
 # Modest speed-dependent kp provides immediate correction when actual
