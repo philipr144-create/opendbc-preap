@@ -55,7 +55,34 @@ def update_preap(cs, can_parsers):
   if ENABLE_HSO:
     # V3 FIX: Use raw torque for INSTANT reaction (to beat Panda safety limits),
     # but require the car to be moving (> 0.3 m/s or ~0.7 mph) to prevent standstill friction loops.
-    is_overriding = abs(ret.steeringTorque) > STEER_THRESHOLD and ret.vEgo > 0.3
+    # Low-speed Pre-AP HSO threshold.
+    #
+    # Tight low-speed turns create considerably more torsion-bar load from
+    # tire scrub / rack effort.  The stock STEER_THRESHOLD=1 can therefore
+    # look like driver override even while openpilot itself is making the turn.
+    #
+    # Keep the extra allowance confined to low speed:
+    #
+    #   <= 5 mph : 2.50
+    #      10 mph : 2.00
+    #      15 mph : 1.50
+    #   >= 20 mph : stock STEER_THRESHOLD (1.00)
+    #
+    # EPAS hands-on-level detection and Panda/EPAS safety remain unchanged.
+    speed_mph = ret.vEgo * 2.236936
+
+    if speed_mph <= 5.0:
+      hso_torque_threshold = 2.50
+    elif speed_mph < 10.0:
+      hso_torque_threshold = 2.50 - ((speed_mph - 5.0) / 5.0) * 0.50
+    elif speed_mph < 15.0:
+      hso_torque_threshold = 2.00 - ((speed_mph - 10.0) / 5.0) * 0.50
+    elif speed_mph < 20.0:
+      hso_torque_threshold = 1.50 - ((speed_mph - 15.0) / 5.0) * (1.50 - STEER_THRESHOLD)
+    else:
+      hso_torque_threshold = STEER_THRESHOLD
+
+    is_overriding = abs(ret.steeringTorque) > hso_torque_threshold and ret.vEgo > 0.3
     ret.steeringPressed = cs.update_steering_pressed(is_overriding, 50)
   else:
     ret.steeringPressed = cs.update_steering_pressed(abs(ret.steeringTorque) > STEER_THRESHOLD, 5)

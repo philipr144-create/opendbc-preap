@@ -1,3 +1,5 @@
+from dataclasses import replace
+import types
 import numpy as np
 from opendbc.can import CANPacker
 from opendbc.car import Bus
@@ -92,20 +94,116 @@ class CarController(CarControllerBase):
     actuators = CC.actuators
     can_sends = []
 
-    # --- HUMAN STEERING OVERRIDE V5 ---
-    if not hasattr(self, 'hso_timer'):
+    # Shared gate for low-speed steering rate and HSO sensitivity.
+    speed_mph = CS.out.vEgo * 2.236936
+    blinker_on = CS.out.leftBlinker or CS.out.rightBlinker
+
+    # PREAP_LOW_SPEED_TURN_TAKEOVER_LATCH_V1
+    # Preserve the wider low-speed turn profile when openpilot remains in
+    # control. If the driver takes over below 15 mph during that maneuver,
+    # remain yielded until both requested and actual steering are centered.
+    if not hasattr(self, "low_speed_turn_exit_timer"):
+      self.low_speed_turn_exit_timer = 0
+
+    if not hasattr(self, "low_speed_turn_takeover_latched"):
+      self.low_speed_turn_takeover_latched = False
+      self.low_speed_turn_reacquire_timer = 0
+
+    if blinker_on and speed_mph < 25.0:
+      self.low_speed_turn_exit_timer = 100
+    elif self.low_speed_turn_exit_timer > 0:
+      self.low_speed_turn_exit_timer -= 1
+
+    low_speed_turn_profile = (
+      speed_mph < 25.0
+      and (
+        blinker_on
+        or self.low_speed_turn_exit_timer > 0
+      )
+    )
+
+    sub15_turn_context = (
+      speed_mph < 15.0
+      and low_speed_turn_profile
+    )
+
+    # --- HUMAN STEERING OVERRIDE V6 ---
+    if not hasattr(self, "hso_timer"):
       self.hso_timer = 0
 
-    # Instantly detect ANY touch (> 0) to yield before EPAS can fight you
-    driver_pulling = CS.out.steeringPressed or getattr(CS, "hands_on_level", 0) > 0
+    hands_on_level = getattr(
+      CS,
+      "hands_on_level",
+      0,
+    )
+
+    # Retain the existing protection from level-1 EPAS effort while
+    # openpilot is performing the wide turn. SteeringPressed and hands-on
+    # level 2+ still yield immediately.
+    hands_on_trigger = (
+      hands_on_level
+      > (1 if low_speed_turn_profile else 0)
+    )
+
+    driver_pulling = (
+      CS.out.steeringPressed
+      or hands_on_trigger
+    )
+
     if driver_pulling:
       self.hso_timer = 50
-        
-    overriding = self.hso_timer > 0
-    if overriding:
+
+    # A takeover that begins during a sub-15-mph turn remains latched.
+    # This prevents the 0.5-second HSO timer from expiring while the model
+    # is still requesting the previous curved path.
+    if not CC.latActive:
+      self.low_speed_turn_takeover_latched = False
+      self.low_speed_turn_reacquire_timer = 0
+
+    elif driver_pulling and sub15_turn_context:
+      self.low_speed_turn_takeover_latched = True
+      self.low_speed_turn_reacquire_timer = 0
+
+    elif self.low_speed_turn_takeover_latched:
+      steering_centered = (
+        not blinker_on
+        and not driver_pulling
+        and abs(CS.out.steeringAngleDeg) <= 10.0
+        and abs(actuators.steeringAngleDeg) <= 10.0
+        and abs(
+          actuators.steeringAngleDeg
+          - CS.out.steeringAngleDeg
+        ) <= 5.0
+      )
+
+      if steering_centered:
+        self.low_speed_turn_reacquire_timer += 1
+      else:
+        self.low_speed_turn_reacquire_timer = 0
+
+      # Require 0.5 second of continuously aligned, centered steering.
+      if self.low_speed_turn_reacquire_timer >= 50:
+        self.low_speed_turn_takeover_latched = False
+        self.low_speed_turn_reacquire_timer = 0
+
+    if self.low_speed_turn_takeover_latched:
+      # Cancel the boosted exit profile after a driver takeover. If lateral
+      # control later reacquires, it will use the normal Tesla steering rate.
+      self.low_speed_turn_exit_timer = 0
+      low_speed_turn_profile = False
+
+    overriding = (
+      self.hso_timer > 0
+      or self.low_speed_turn_takeover_latched
+    )
+
+    if self.hso_timer > 0:
       self.hso_timer -= 1
-        
-    lat_active = CC.latActive and not overriding
+
+    lat_active = (
+      CC.latActive
+      and not overriding
+    )
     # ----------------------------------
 
     if self.frame % 2 == 0:
@@ -113,8 +211,48 @@ class CarController(CarControllerBase):
       if overriding:
         self.apply_angle_last = CS.out.steeringAngleDeg
 
+      # ========================================================
+      # BLINKER-GATED LOW-SPEED STEERING RATE
+      #
+      # Blinker OFF:
+      #   stock Tesla steering rate
+      #
+      # Blinker ON + below 25 mph:
+      #   <=5 mph : 9.00 deg / 20ms
+      #    10 mph : 8.50 deg / 20ms
+      #    15 mph : 8.00 deg / 20ms
+      #    20 mph : 7.50 deg / 20ms
+      #    25 mph : 7.00 deg / 20ms stock
+      #
+      # VM lateral accel/jerk limits remain active.
+      # ========================================================
+      params_to_use = CarControllerParams
+
+      if low_speed_turn_profile:
+        speed_fraction = max(
+          0.0,
+          min(
+            1.0,
+            (speed_mph - 5.0) / 20.0,
+          ),
+        )
+
+        low_speed_max_angle_rate = (
+          9.0 - (2.0 * speed_fraction)
+        )
+
+        scaled_limits = replace(
+          CarControllerParams.ANGLE_LIMITS,
+          MAX_ANGLE_RATE=low_speed_max_angle_rate,
+        )
+
+        params_to_use = types.SimpleNamespace(
+          ANGLE_LIMITS=scaled_limits,
+          STEER_STEP=CarControllerParams.STEER_STEP,
+        )
+
       self.apply_angle_last = apply_steer_angle_limits_vm(target_angle, self.apply_angle_last, CS.out.vEgoRaw, CS.out.steeringAngleDeg,
-                                                          lat_active, CarControllerParams, self.VM)
+                                                          lat_active, params_to_use, self.VM)
       cntr = (self.frame // 2) % 16
       can_sends.append(self.tesla_can.create_steering_control(cntr, self.apply_angle_last, lat_active))
       can_sends.append(self.tesla_can.create_epas_control(cntr, 1)) # EPAS must stay powered to avoid shudder

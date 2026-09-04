@@ -102,7 +102,7 @@ class GradeEstimator:
 class JerkLimiter:
   """Asymmetric S-curve rate limiter on acceleration commands."""
 
-  def __init__(self, j_pos_max: float = 2.5, j_neg_max: float = 5.0, dt: float = 0.02):
+  def __init__(self, j_pos_max: float = 2.5, j_neg_max: float = 2.5, dt: float = 0.02):
     self.j_pos_max = j_pos_max
     self.j_neg_max = j_neg_max
     self.dt = dt
@@ -116,6 +116,38 @@ class JerkLimiter:
 
   def reset(self, a_init: float = 0.0):
     self.a_limited = a_init
+
+
+# PREAP_ROAD_LOAD_FEEDFORWARD_V1
+# Desired acceleration is vehicle acceleration, not motor acceleration.
+# Holding 0.0 m/s² at speed requires positive motor torque to overcome
+# tire and aerodynamic drag. Without this baseline, the pedal repeatedly
+# crosses the physical drive/regen boundary while holding speed.
+#
+# Values are deliberately conservative. Segment 28 required approximately
+# 9-10 DI at 55-57 mph for nearly zero net acceleration.
+ROAD_LOAD_SPEED_BP = [
+  0.0,
+  5.0,
+  12.0,
+  20.0,
+  30.0,
+  40.0,
+]
+
+ROAD_LOAD_HOLD_DI = [
+  0.0,
+  1.0,
+  3.5,
+  6.5,
+  10.0,
+  13.0,
+]
+
+# Fade road-load support smoothly during mild deceleration. At or below
+# -0.6 m/s² it is completely removed, preserving the current lead, stop,
+# overspeed, and maximum-regen authority.
+ROAD_LOAD_FADE_DECEL = -0.60
 
 
 class FeedforwardModel:
@@ -170,6 +202,28 @@ class FeedforwardModel:
       blend = float(1.0 - a_cmd / ACCEL_MAX)
     base_di += zero_torque_di * blend
 
+    # PREAP_ROAD_LOAD_FEEDFORWARD_V1
+    # Supply the speed-dependent torque required for zero net vehicle
+    # acceleration. Mild negative requests progressively release this
+    # torque instead of abruptly crossing into regen.
+    road_load_di = float(interp(
+      v_ego,
+      ROAD_LOAD_SPEED_BP,
+      ROAD_LOAD_HOLD_DI,
+    ))
+
+    road_load_blend = float(clip(
+      (
+        a_cmd - ROAD_LOAD_FADE_DECEL
+      ) / (
+        0.0 - ROAD_LOAD_FADE_DECEL
+      ),
+      0.0,
+      1.0,
+    ))
+
+    base_di += road_load_di * road_load_blend
+
     return base_di
 
 
@@ -182,7 +236,7 @@ class VirtualDAS:
 
   def __init__(self, dt: float = 0.02):
     self.dt = dt
-    self.jerk_limiter = JerkLimiter(j_pos_max=2.5, j_neg_max=5.0, dt=dt)
+    self.jerk_limiter = JerkLimiter(j_pos_max=2.5, j_neg_max=2.5, dt=dt)
     self.ff_model = FeedforwardModel()
     self.grade_estimator = GradeEstimator(dt=dt)
     self.prev_pedal_di = 0.0

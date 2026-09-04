@@ -29,6 +29,7 @@ def get_preap_accel_limits(current_speed):
       pass
   profile = ACCEL_PREAP_PROFILES.get(personality, ACCEL_PREAP_PROFILES[1])
   a_max = float(np.interp(current_speed, ACCEL_PREAP_BP, profile))
+  # Allow longcontrol to use VirtualDAS's complete regen range.
   return -1.5, a_max
 
 
@@ -79,6 +80,9 @@ def get_preap_params(ret, fingerprint):
   ret.alphaLongitudinalAvailable = False
   ret.vEgoStopping = 0.1
   ret.vEgoStarting = 0.1
+
+  # Use a controlled regen ramp for planned stops.
+  ret.stopAccel = -1.5
   ret.stoppingDecelRate = 1.0
 
   # Pre-AP Model S is physically the same platform as HW1/HW2/HW3 Model S.
