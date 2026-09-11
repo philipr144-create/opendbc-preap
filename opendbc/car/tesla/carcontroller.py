@@ -11,6 +11,9 @@ from opendbc.car.tesla.values import CarControllerParams, CANBUS, LEGACY_CARS, C
 from opendbc.car.vehicle_model import VehicleModel
 from opendbc.car.tesla.preap.carcontroller import PreAPLongController, init_preap_can
 from opendbc.car.tesla.preap.stock_cc_spoofer import StockCCSpoofer
+from opendbc.car.tesla.preap.parked_signal_test import ParkedSignalTest
+from opendbc.car.tesla.preap.tap_lane_change import TapController
+from opendbc.car.tesla.preap.nap_params import NAPParamKeys
 
 def get_safety_CP():
   from opendbc.car.tesla.interface import CarInterface
@@ -35,6 +38,13 @@ class CarController(CarControllerBase):
       if CP.carFingerprint == CAR.TESLA_MODEL_S_PREAP:
         self.preap_long = PreAPLongController()
         self.stock_cc = StockCCSpoofer()
+        self.parked_signal_test = ParkedSignalTest()
+        self.tap_lane_change = TapController()
+        try:
+          from openpilot.common.params import Params
+          self.tap_params = Params()
+        except ImportError:
+          self.tap_params = None
         self.tesla_can = init_preap_can(dbc_names, self.packers)
       else:
         self.tesla_can = TeslaCANRaven(self.packers)
@@ -265,6 +275,15 @@ class CarController(CarControllerBase):
     can_sends.extend(self.stock_cc.update(CS, self.frame, self.tesla_can, CANBUS.party))
     if self.stock_cc.pcc_event:
       CS.pccEvent = self.stock_cc.pcc_event
+
+    # Independent parked-only one-shot test; existing cruise transmissions win.
+    can_sends.extend(self.parked_signal_test.update(CC, CS, can_sends))
+
+    tap_enabled = (self.tap_params is not None and self.tap_params.check_key(NAPParamKeys.TAP_LANE_CHANGE)
+                   and self.tap_params.get_bool(NAPParamKeys.TAP_LANE_CHANGE))
+    can_sends.extend(self.tap_lane_change.update(
+      CS.tap_stalk, CS.out, enabled=tap_enabled,
+      lateral_active=CC.latActive, overriding=overriding, existing=can_sends))
 
     new_actuators = actuators.as_builder()
     new_actuators.steeringAngleDeg = self.apply_angle_last

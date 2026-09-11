@@ -7,6 +7,7 @@ from opendbc.car import Bus, structs
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.tesla.values import DBC, CANBUS, GEAR_MAP, STEER_THRESHOLD
 from opendbc.car.tesla.preap.nap_params import NAPParamKeys
+from opendbc.car.tesla.preap.tap_lane_change import PhysicalStalk
 from opendbc.car.tesla.preap.nap_conf import nap_conf, PEDAL_DI_PRESSED
 
 try:
@@ -27,6 +28,7 @@ def update_preap(cs, can_parsers):
   cp_ap_party = can_parsers[Bus.ap_party]
   cp_pt = can_parsers[Bus.pt]
   cp_chassis = can_parsers[Bus.chassis]
+  cs.tap_stalk = cp_chassis.physical_stalk
   ret = structs.CarState()
 
   # Vehicle speed
@@ -226,6 +228,16 @@ def update_preap(cs, can_parsers):
   return ret
 
 
+class PreAPChassisParser(CANParser):
+  def __init__(self, *args, **kwargs):
+    super().__init__(*args, **kwargs)
+    self.physical_stalk = PhysicalStalk()
+
+  def update(self, packets, sendcan=False):
+    self.physical_stalk.feed(packets)
+    return super().update(packets, sendcan=sendcan)
+
+
 def get_preap_can_parsers(CP):
   chassis_messages = [
     ("ESP_B", 0), ("BrakeMessage", 0), ("DI_state", 0), ("DI_torque2", 0),
@@ -245,5 +257,5 @@ def get_preap_can_parsers(CP):
     Bus.ap_party: CANParser(DBC[CP.carFingerprint][Bus.party], pedal_messages, pedal_bus),
     Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], pt_messages, CANBUS.party),
     Bus.ap_pt: CANParser(DBC[CP.carFingerprint][Bus.pt], [], CANBUS.party),
-    Bus.chassis: CANParser(DBC[CP.carFingerprint][Bus.chassis], chassis_messages, CANBUS.party),
+    Bus.chassis: PreAPChassisParser(DBC[CP.carFingerprint][Bus.chassis], chassis_messages, CANBUS.party),
   }

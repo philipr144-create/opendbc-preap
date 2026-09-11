@@ -31,12 +31,16 @@ class NAPParamKeys:
   IBOOSTER_ENABLED = "NAPiBoosterEnabled"
   BRAKE_FACTOR = "NAPBrakeFactor"
 
+  # Experimental lateral feature (off by default)
+  TAP_LANE_CHANGE = "NapTapLaneChange"
+
   # Advanced
   FORCE_PRE_AP = "NAPForcePreAP"
 
 
 # Default values matching params_keys.h declarations
 DEFAULTS = {
+  NAPParamKeys.TAP_LANE_CHANGE: False,
   NAPParamKeys.ADAPTIVE_ACCEL: True,
   NAPParamKeys.PEDAL_ENABLED: False,
   NAPParamKeys.FOLLOW_DISTANCE: 4,
