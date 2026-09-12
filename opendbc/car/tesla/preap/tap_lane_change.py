@@ -21,6 +21,7 @@ REQUEST_PATH = "/dev/shm/nap_tap_lane_change_request.json"
 ACK_PATH = "/dev/shm/nap_tap_lane_change_ack.json"
 NAV_SIGNAL_REQUEST_PATH = "/dev/shm/nap_navigation_signal_request.json"
 NAV_SIGNAL_STATUS_PATH = "/dev/shm/nap_navigation_signal_status.json"
+NAV_SIGNAL_RETRIGGER_SECONDS = 2.0
 
 
 class Snapshot:
@@ -317,13 +318,15 @@ class NavigationSignalController:
     self.direction = 0
     self.request_key = None
     self.held_sent = False
+    self.pulse_time = -math.inf
+    self.feedback_active = False
     self.cleanup = deque()
     self.cleanup_deadline = 0.0
     self.last_raw_time = -math.inf
 
   def _stop(self, now, manual=False):
     old_direction = self.direction
-    if self.held_sent and old_direction and not manual:
+    if self.held_sent and self.feedback_active and old_direction and not manual:
       # Release the held stalk request, cancel Tesla's latched indicator, then
       # release the cancellation pulse. This is the same sequence tap uses.
       self.cleanup = deque((0, old_direction, 0))
@@ -333,6 +336,8 @@ class NavigationSignalController:
     self.direction = 0
     self.request_key = None
     self.held_sent = False
+    self.pulse_time = -math.inf
+    self.feedback_active = False
 
   def update(self, stalk, cs, *, lateral_active, overriding, existing=(), now=None):
     now = time.monotonic() if now is None else now
@@ -347,6 +352,11 @@ class NavigationSignalController:
       and bool(request_key)
       and cs.canValid
       and lateral_active
+    )
+
+    self.feedback_active = bool(
+      self.direction
+      and (cs.leftBlinker if self.direction == 1 else cs.rightBlinker)
     )
 
     physical_input = (
@@ -366,6 +376,16 @@ class NavigationSignalController:
       self.direction = requested_direction
       self.request_key = request_key
 
+    # Send one clean tap and let Tesla own the visible flash cadence. Rearm
+    # only after the factory cycle ends while navigation still requests it.
+    if (
+      self.direction
+      and self.held_sent
+      and not self.feedback_active
+      and now - self.pulse_time >= NAV_SIGNAL_RETRIGGER_SECONDS
+    ):
+      self.held_sent = False
+
     if self.cleanup and now > self.cleanup_deadline:
       self.cleanup.clear()
 
@@ -382,9 +402,10 @@ class NavigationSignalController:
     ):
       if self.cleanup:
         sends.append(signal_frame(stalk.raw, self.cleanup.popleft()))
-      elif self.direction:
+      elif self.direction and not self.held_sent:
         sends.append(signal_frame(stalk.raw, self.direction))
         self.held_sent = True
+        self.pulse_time = now
       if sends:
         self.last_raw_time = stalk.time
 
@@ -398,6 +419,9 @@ class NavigationSignalController:
         "cleanup": bool(self.cleanup),
         "physical_override": physical_input,
         "request_valid": request is not None,
+        "pulse_mode": True,
+        "pulse_sent": self.held_sent,
+        "feedback_active": self.feedback_active,
       },
       now,
     )
