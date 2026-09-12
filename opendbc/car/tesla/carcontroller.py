@@ -12,7 +12,7 @@ from opendbc.car.vehicle_model import VehicleModel
 from opendbc.car.tesla.preap.carcontroller import PreAPLongController, init_preap_can
 from opendbc.car.tesla.preap.stock_cc_spoofer import StockCCSpoofer
 from opendbc.car.tesla.preap.parked_signal_test import ParkedSignalTest
-from opendbc.car.tesla.preap.tap_lane_change import TapController
+from opendbc.car.tesla.preap.tap_lane_change import NavigationSignalController, TapController
 from opendbc.car.tesla.preap.nap_params import NAPParamKeys
 
 def get_safety_CP():
@@ -39,6 +39,7 @@ class CarController(CarControllerBase):
         self.preap_long = PreAPLongController()
         self.stock_cc = StockCCSpoofer()
         self.parked_signal_test = ParkedSignalTest()
+        self.navigation_signal = NavigationSignalController()
         self.tap_lane_change = TapController()
         try:
           from openpilot.common.params import Params
@@ -289,6 +290,13 @@ class CarController(CarControllerBase):
 
     # Independent parked-only one-shot test; existing cruise transmissions win.
     can_sends.extend(self.parked_signal_test.update(CC, CS, can_sends))
+
+    # Navigation only announces a maneuver already authorized by modeld. It
+    # gets the synthetic-indicator slot before tap; live physical stalk input
+    # is enforced inside both controllers and always has highest priority.
+    can_sends.extend(self.navigation_signal.update(
+      CS.tap_stalk, CS.out, lateral_active=CC.latActive,
+      overriding=overriding, existing=can_sends))
 
     tap_enabled = (self.tap_params is not None and self.tap_params.check_key(NAPParamKeys.TAP_LANE_CHANGE)
                    and self.tap_params.get_bool(NAPParamKeys.TAP_LANE_CHANGE))

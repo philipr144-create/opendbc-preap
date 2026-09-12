@@ -19,6 +19,8 @@ LINK_MAX_AGE = 0.25
 MANEUVER_MAX = 10.0
 REQUEST_PATH = "/dev/shm/nap_tap_lane_change_request.json"
 ACK_PATH = "/dev/shm/nap_tap_lane_change_ack.json"
+NAV_SIGNAL_REQUEST_PATH = "/dev/shm/nap_navigation_signal_request.json"
+NAV_SIGNAL_STATUS_PATH = "/dev/shm/nap_navigation_signal_status.json"
 
 
 class Snapshot:
@@ -275,7 +277,7 @@ class TapController:
       if sends:
         self.last_raw_time = stalk.time
     if self.phase == "active" and not free_bus:
-      self.cancel("cruise sender has priority", now)
+      self.cancel("higher-priority STW sender has priority", now)
     for msg in (*existing, *sends):
       stalk.remember_tx(msg, now)
     published = self.request.write(
@@ -286,6 +288,10 @@ class TapController:
         "phase": self.phase,
         "enabled": bool(enabled),
         "suppress": self.suppress,
+        # `suppress` is a replay/cooldown latch, not signal ownership.  Publish
+        # the actual synthetic-output lifetime separately so modeld cannot
+        # mistake an enabled, completed, or cancelled tap for an active owner.
+        "signal_active": self.phase == "active" or bool(self.cleanup),
         "gesture": stalk.gesture,
         "physical_direction": stalk.direction,
         "reason": self.reason,
@@ -295,4 +301,105 @@ class TapController:
     if not published:
       self.cancel("request publication failed", now)
       return []
+    return sends
+
+
+class NavigationSignalController:
+  """Announce an already-authorized navigation maneuver on STW_ACTN_RQ.
+
+  This controller never creates a model desire.  It only consumes the separate
+  modeld request, and physical stalk/cruise input always wins.
+  """
+
+  def __init__(self, request_path=NAV_SIGNAL_REQUEST_PATH, status_path=NAV_SIGNAL_STATUS_PATH):
+    self.request = Snapshot(request_path)
+    self.status = Snapshot(status_path)
+    self.direction = 0
+    self.request_key = None
+    self.held_sent = False
+    self.cleanup = deque()
+    self.cleanup_deadline = 0.0
+    self.last_raw_time = -math.inf
+
+  def _stop(self, now, manual=False):
+    old_direction = self.direction
+    if self.held_sent and old_direction and not manual:
+      # Release the held stalk request, cancel Tesla's latched indicator, then
+      # release the cancellation pulse. This is the same sequence tap uses.
+      self.cleanup = deque((0, old_direction, 0))
+      self.cleanup_deadline = now + LINK_MAX_AGE
+    if manual:
+      self.cleanup.clear()
+    self.direction = 0
+    self.request_key = None
+    self.held_sent = False
+
+  def update(self, stalk, cs, *, lateral_active, overriding, existing=(), now=None):
+    now = time.monotonic() if now is None else now
+    request = self.request.read(now)
+    requested_direction = request.get("direction") if request is not None else 0
+    request_key = request.get("maneuver_id") if request is not None else None
+    requested = (
+      request is not None
+      and request.get("active") is True
+      and requested_direction in (1, 2)
+      and isinstance(request_key, str)
+      and bool(request_key)
+      and cs.canValid
+      and lateral_active
+      and not overriding
+    )
+
+    physical_input = (
+      stalk.fresh(now)
+      and stalk.raw is not None
+      and (stalk.direction not in (None, 0) or bool(stalk.raw[0] & 63))
+    )
+    if physical_input:
+      self._stop(now, manual=True)
+    elif not requested:
+      if self.direction:
+        self._stop(now)
+    elif self.direction and (requested_direction != self.direction or request_key != self.request_key):
+      self._stop(now)
+
+    if requested and not physical_input and not self.cleanup and not self.direction:
+      self.direction = requested_direction
+      self.request_key = request_key
+
+    if self.cleanup and now > self.cleanup_deadline:
+      self.cleanup.clear()
+
+    sends = []
+    free_bus = not any(msg[0] == 0x45 for msg in existing)
+    if (
+      cs.canValid
+      and stalk.fresh(now)
+      and stalk.direction == 0
+      and stalk.raw is not None
+      and not stalk.raw[0] & 63
+      and free_bus
+      and stalk.time != self.last_raw_time
+    ):
+      if self.cleanup:
+        sends.append(signal_frame(stalk.raw, self.cleanup.popleft()))
+      elif self.direction:
+        sends.append(signal_frame(stalk.raw, self.direction))
+        self.held_sent = True
+      if sends:
+        self.last_raw_time = stalk.time
+
+    for msg in sends:
+      stalk.remember_tx(msg, now)
+    self.status.write(
+      {
+        "active": bool(self.direction),
+        "direction": self.direction,
+        "maneuver_id": self.request_key or "",
+        "cleanup": bool(self.cleanup),
+        "physical_override": physical_input,
+        "request_valid": request is not None,
+      },
+      now,
+    )
     return sends
