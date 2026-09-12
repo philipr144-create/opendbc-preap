@@ -347,7 +347,6 @@ class NavigationSignalController:
       and bool(request_key)
       and cs.canValid
       and lateral_active
-      and not overriding
     )
 
     physical_input = (
