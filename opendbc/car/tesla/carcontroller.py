@@ -238,6 +238,17 @@ class CarController(CarControllerBase):
       # ========================================================
       params_to_use = CarControllerParams
 
+      if not hasattr(self, 'params'):
+        from openpilot.common.params import Params
+        self.params = Params()
+        self.low_speed_steering_rate_enabled = True
+
+      if self.frame % 100 == 0:
+        self.low_speed_steering_rate_enabled = self.params.get_bool("NAPLowSpeedSteeringRate")
+
+      if not self.low_speed_steering_rate_enabled:
+        low_speed_turn_profile = False
+
       if low_speed_turn_profile:
         speed_fraction = max(
           0.0,

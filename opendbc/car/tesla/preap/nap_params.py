@@ -13,6 +13,7 @@ class NAPParamKeys:
   ADAPTIVE_ACCEL = "NAPAdaptiveAccel"
   PEDAL_ENABLED = "NAPPedalEnabled"
   FOLLOW_DISTANCE = "NAPFollowDistance"
+  
   # Pedal Hardware
   PEDAL_PROFILE = "NAPPedalProfile"
   PEDAL_CAN_BUS = "NAPPedalCanBus"
@@ -31,11 +32,17 @@ class NAPParamKeys:
   IBOOSTER_ENABLED = "NAPiBoosterEnabled"
   BRAKE_FACTOR = "NAPBrakeFactor"
 
-  # Experimental lateral feature (off by default)
+  # Pre-AP Lateral & Steering Features
   TAP_LANE_CHANGE = "NapTapLaneChange"
+  CITY_TURNS = "NAPCityTurns"
+  WIDE_LOW_SPEED_TURNS = "NAPWideLowSpeedTurns"
+  LOW_SPEED_STEERING_RATE = "NAPLowSpeedSteeringRate"
+  NAVIGATION_MANEUVERS = "NAPNavigationManeuvers"
+  CORNER_ASSIST = "NAPCornerAssist"
 
-  # Advanced
+  # Advanced / Developer
   FORCE_PRE_AP = "NAPForcePreAP"
+  PARKED_SIGNAL_TEST = "NAPParkedSignalTest"
 
 
 # Default values matching params_keys.h declarations
@@ -57,4 +64,10 @@ DEFAULTS = {
   NAPParamKeys.IBOOSTER_ENABLED: False,
   NAPParamKeys.BRAKE_FACTOR: 1.0,
   NAPParamKeys.FORCE_PRE_AP: False,
+  NAPParamKeys.CITY_TURNS: True,
+  NAPParamKeys.WIDE_LOW_SPEED_TURNS: True,
+  NAPParamKeys.LOW_SPEED_STEERING_RATE: True,
+  NAPParamKeys.NAVIGATION_MANEUVERS: True,
+  NAPParamKeys.CORNER_ASSIST: True,
+  NAPParamKeys.PARKED_SIGNAL_TEST: False,
 }

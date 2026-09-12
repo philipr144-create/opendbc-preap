@@ -107,6 +107,14 @@ class ParkedSignalTest:
         raise ValueError('Invalid command')
       request = command.get('request')
       request_id = request.get('id') if isinstance(request, dict) else None
+      if not hasattr(self, 'params'):
+        from openpilot.common.params import Params
+        self.params = Params()
+      
+      if self.params.get_bool("NAPParkedSignalTest") is False:
+        self.reason = 'Disabled in NAP Advanced Settings'
+        return []
+
       if not self.initialized:
         self.last_id = request_id  # Never replay a command on controller restart.
         self.initialized = True

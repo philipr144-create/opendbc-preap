@@ -183,6 +183,13 @@ class TapController:
         "blocked",
       )
     )
+    if not hasattr(self, 'params'):
+      from openpilot.common.params import Params
+      self.params = Params()
+    
+    if self.params.get_bool("NapTapLaneChange") is False:
+      enabled = False
+
     eligible = (
       enabled
       and lateral_active
