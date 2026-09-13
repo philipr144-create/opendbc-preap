@@ -13,7 +13,7 @@ from opendbc.car.tesla.preap.parked_signal_test import crc8
 TAP_MAX = (
   0.5  # A half-stalk gesture is classified on release, without a dwell afterwards.
 )
-SPEED_MIN = 40 * 0.44704
+SPEED_MIN = 30 * 0.44704
 STALK_MAX_AGE = 0.15
 LINK_MAX_AGE = 0.25
 MANEUVER_MAX = 10.0
