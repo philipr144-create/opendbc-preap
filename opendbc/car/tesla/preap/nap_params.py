@@ -36,6 +36,8 @@ class NAPParamKeys:
   TAP_LANE_CHANGE = "NapTapLaneChange"
   CITY_TURNS = "NAPCityTurns"
   WIDE_LOW_SPEED_TURNS = "NAPWideLowSpeedTurns"
+  LANE_CENTERING = "NAPLaneCentering"
+  LANE_CENTERING_STRENGTH = "NAPLaneCenteringStrength"
   LOW_SPEED_STEERING_RATE = "NAPLowSpeedSteeringRate"
   NAVIGATION_MANEUVERS = "NAPNavigationManeuvers"
   CORNER_ASSIST = "NAPCornerAssist"
@@ -66,6 +68,8 @@ DEFAULTS = {
   NAPParamKeys.FORCE_PRE_AP: False,
   NAPParamKeys.CITY_TURNS: True,
   NAPParamKeys.WIDE_LOW_SPEED_TURNS: True,
+  NAPParamKeys.LANE_CENTERING: False,
+  NAPParamKeys.LANE_CENTERING_STRENGTH: 1,
   NAPParamKeys.LOW_SPEED_STEERING_RATE: True,
   NAPParamKeys.NAVIGATION_MANEUVERS: True,
   NAPParamKeys.CORNER_ASSIST: True,
