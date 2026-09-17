@@ -291,18 +291,17 @@ class CarController(CarControllerBase):
     # Independent parked-only one-shot test; existing cruise transmissions win.
     can_sends.extend(self.parked_signal_test.update(CC, CS, can_sends))
 
-    # Navigation only announces a maneuver already authorized by modeld. It
-    # gets the synthetic-indicator slot before tap; live physical stalk input
-    # is enforced inside both controllers and always has highest priority.
-    can_sends.extend(self.navigation_signal.update(
-      CS.tap_stalk, CS.out, lateral_active=CC.latActive,
-      overriding=overriding, existing=can_sends))
-
+    # Complete an in-progress lane-change tap before navigation uses the
+    # synthetic signal slot. Physical stalk input wins in both controllers.
     tap_enabled = (self.tap_params is not None and self.tap_params.check_key(NAPParamKeys.TAP_LANE_CHANGE)
                    and self.tap_params.get_bool(NAPParamKeys.TAP_LANE_CHANGE))
     can_sends.extend(self.tap_lane_change.update(
       CS.tap_stalk, CS.out, enabled=tap_enabled,
       lateral_active=CC.latActive, overriding=overriding, existing=can_sends))
+
+    can_sends.extend(self.navigation_signal.update(
+      CS.tap_stalk, CS.out, lateral_active=CC.latActive,
+      overriding=overriding, existing=can_sends))
 
     new_actuators = actuators.as_builder()
     new_actuators.steeringAngleDeg = self.apply_angle_last

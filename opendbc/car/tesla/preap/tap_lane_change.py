@@ -149,6 +149,7 @@ class TapController:
     self.cleanup_deadline = 0.0
     self.last_raw_time = -math.inf
 
+
   def cancel(self, reason, now, manual=False):
     if self.phase in ("pending", "active"):
       self.phase = "cancelled"
@@ -320,6 +321,7 @@ class NavigationSignalController:
     self.cleanup = deque()
     self.cleanup_deadline = 0.0
     self.last_raw_time = -math.inf
+    self.last_tx_time = -math.inf
 
   def _stop(self, now, manual=False):
     old_direction = self.direction
@@ -390,9 +392,25 @@ class NavigationSignalController:
 
     for msg in sends:
       stalk.remember_tx(msg, now)
+    if sends and self.direction:
+      self.last_tx_time = now
+    blocked = (
+      'no fresh model request' if request is None else
+      'request inactive' if not requested else
+      'physical stalk or cruise input' if physical_input else
+      'CAN or stalk data unavailable' if not cs.canValid or not stalk.fresh(now) or stalk.raw is None else
+      'stalk not neutral' if stalk.direction != 0 or stalk.raw[0] & 63 else
+      'another stalk sender active' if not free_bus else
+      'waiting for fresh stalk frame' if stalk.time == self.last_raw_time else
+      ''
+    )
     self.status.write(
       {
         "active": bool(self.direction),
+        "sent": bool(sends and self.direction),
+        "sent_recent": bool(self.direction and now-self.last_tx_time < .5),
+        "held_sent": self.held_sent,
+        "block_reason": blocked,
         "direction": self.direction,
         "maneuver_id": self.request_key or "",
         "cleanup": bool(self.cleanup),

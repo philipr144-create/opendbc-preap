@@ -30,7 +30,7 @@ def get_preap_accel_limits(current_speed):
   profile = ACCEL_PREAP_PROFILES.get(personality, ACCEL_PREAP_PROFILES[1])
   a_max = float(np.interp(current_speed, ACCEL_PREAP_BP, profile))
   # Allow longcontrol to use VirtualDAS's complete regen range.
-  return -1.5, a_max
+  return -2.5, a_max
 
 
 def get_preap_params(ret, fingerprint):

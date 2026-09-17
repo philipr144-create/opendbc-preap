@@ -7,19 +7,20 @@
 #   aggressive(0) → spirited but controlled
 #   standard(1)   → smooth daily driver
 #   relaxed(2)    → gentle, minimal push
-ACCEL_PREAP_BP = [0.0, 1.3, 7.5, 15.0, 25.0, 40.0]  # m/s
-#                  0    3    17    33    56    90  mph
+# Extra speed points shape the Relaxed response above 20 mph. The other
+# profiles retain their previous piecewise-linear envelopes.
+ACCEL_PREAP_BP = [0.0, 1.3, 7.5, 8.9408, 11.176, 13.4112, 15.0, 17.8816, 22.352, 25.0, 26.8224, 31.2928, 40.0]  # m/s
 ACCEL_PREAP_PROFILES = {
-  0: [0.4, 0.8, 1.1, 1.0, 0.85, 0.7],   # aggressive
-  1: [0.3, 0.7, 1.0, 0.9, 0.8, 0.65],   # standard
-  2: [0.3, 0.6, 0.9, 0.8, 0.7, 0.55],   # relaxed
+  0: [0.4, 0.8, 1.1, 1.081, 1.051, 1.021, 1, 0.957, 0.89, 0.85, 0.832, 0.787, 0.7],  # aggressive
+  1: [0.3, 0.7, 1, 0.981, 0.951, 0.921, 0.9, 0.871, 0.826, 0.8, 0.782, 0.737, 0.65],  # standard
+  2: [0.3, 0.6, 0.9, 0.8, 0.74, 0.68, 0.66, 0.64, 0.62, 0.61, 0.6, 0.58, 0.55],  # relaxed; pedal authority stays above MPC comfort cap
 }
 
 # When following a lead car, cap positive accel to these values regardless
 # of personality. Prevents overshoot → regen → overshoot oscillation.
 # Open road uses the full profile above; this only limits follow mode.
 # PREAP_MPC_LEAD_CAP_V1
-ACCEL_PREAP_FOLLOW = [0.9, 1.1, 0.9, 0.6, 0.45, 0.35]
+ACCEL_PREAP_FOLLOW = [0.9, 1.1, 0.9, 0.842, 0.753, 0.664, 0.6, 0.557, 0.49, 0.45, 0.438, 0.408, 0.35]
 
 # Feedforward-dominant longitudinal tune (FrogPilot/OPGM Bolt-inspired).
 # Modest speed-dependent kp provides immediate correction when actual
