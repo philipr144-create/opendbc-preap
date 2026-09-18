@@ -43,6 +43,47 @@ class TestPreAPBrakeDisengage(unittest.TestCase):
     self.assertFalse(eng.enableLongControl, "Longitudinal should drop on brake")
     self.assertTrue(eng.enableJustCC, "Should transition to CC-only mode")
 
+  def test_brake_throttle_resume_requires_fresh_tap(self):
+    eng = self._make_engagement()
+    self._engage_single_pull(eng)
+    previous_target = eng.pedal_speed_kph
+    eng.process_buttons(0, 0, 2000, 0.0, "KPH", True, True, True, True)
+    step = lambda t, brake=False, gas=False, speed=0.0, enabled=True, healthy=True: eng.process_brake_resume(
+      t, speed, brake, gas, healthy, True, True, enabled)
+    self.assertFalse(step(2010, brake=True))
+    self.assertFalse(step(2100))
+    self.assertFalse(eng.enableLongControl)
+    self.assertFalse(step(2200, gas=True))
+    self.assertTrue(step(2320))
+    self.assertTrue(eng.enableLongControl)
+    self.assertEqual(eng.pedal_speed_kph, previous_target)
+
+  def test_brake_throttle_resume_interlocks(self):
+    for case in ("disabled", "fast", "stale_pedal", "brake", "long_press"):
+      with self.subTest(case=case):
+        eng = self._make_engagement()
+        self._engage_single_pull(eng)
+        eng.process_buttons(0, 0, 2000, 0.0, "KPH", True, True, True, True)
+        step = lambda t, brake=False, gas=False, speed=0.0, enabled=True, healthy=True: eng.process_brake_resume(
+          t, speed, brake, gas, healthy, True, True, enabled)
+        step(2100)
+        if case == "disabled":
+          step(2200, gas=True, enabled=False)
+          step(2300)
+        elif case == "fast":
+          step(2200, gas=True, speed=4.0)
+          step(2300, speed=4.0)
+        elif case == "stale_pedal":
+          step(2200, gas=True, healthy=False)
+          step(2300)
+        elif case == "brake":
+          step(2200, gas=True, brake=True)
+          step(2300, brake=True)
+        else:
+          step(2200, gas=True)
+          step(3200)
+        self.assertFalse(eng.enableLongControl)
+
   def test_brake_no_effect_without_pedal(self):
     # In non-pedal mode (stock CC only), brake doesn't trigger any action
     # in the engagement FSM — stock CC handles its own brake disengage.

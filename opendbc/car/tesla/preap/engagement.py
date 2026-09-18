@@ -8,6 +8,9 @@ ButtonType = structs.CarState.ButtonEvent.Type
 # Echo filter windows: suppress auto-cancel echoes from spoofed stalk messages
 CANCEL_ECHO_WINDOW_MS = 600
 SPOOF_ECHO_WINDOW_MS = 300
+RESUME_MAX_SPEED_MS = 7.0 / 2.236936
+RESUME_TAP_MIN_MS = 50
+RESUME_TAP_MAX_MS = 800
 
 
 class PreAPEngagement:
@@ -36,6 +39,51 @@ class PreAPEngagement:
     self.preap_brake_pressed_prev = False
     self.last_stalk_non_cancel_ms = -10000
     self.prev_steering_disengage = False
+    self.brake_paused_long = False
+    self.resume_target_kph = 0.0
+    self.resume_ready_for_press = False
+    self.resume_press_ms = 0
+    self.resume_prev_gas_pressed = False
+
+  def clear_brake_resume(self):
+    self.brake_paused_long = False
+    self.resume_ready_for_press = False
+    self.resume_press_ms = 0
+
+  def process_brake_resume(self, curr_time_ms, v_ego, real_brake_pressed,
+                           gas_pressed, pedal_available, pedal_long_allowed,
+                           can_engage, enabled):
+    """Resume pedal longitudinal only after a fresh low-speed throttle tap."""
+    gas_rising = gas_pressed and not self.resume_prev_gas_pressed
+    gas_falling = not gas_pressed and self.resume_prev_gas_pressed
+    self.resume_prev_gas_pressed = gas_pressed
+
+    if not (enabled and can_engage and self.cruiseEnabled and
+            pedal_available and pedal_long_allowed and self.brake_paused_long):
+      self.clear_brake_resume()
+      return False
+    if real_brake_pressed or v_ego > RESUME_MAX_SPEED_MS:
+      self.resume_ready_for_press = False
+      self.resume_press_ms = 0
+      return False
+
+    # A pedal already down as the brake is released is not a fresh command.
+    if not gas_pressed and not self.resume_ready_for_press and not gas_falling:
+      self.resume_ready_for_press = True
+    if self.resume_ready_for_press and gas_rising:
+      self.resume_press_ms = curr_time_ms
+    if gas_falling and self.resume_press_ms:
+      duration_ms = curr_time_ms - self.resume_press_ms
+      self.resume_press_ms = 0
+      if RESUME_TAP_MIN_MS <= duration_ms <= RESUME_TAP_MAX_MS:
+        self.enableLongControl = True
+        self.enableJustCC = False
+        self.pedal_speed_kph = self.resume_target_kph
+        self.longCtrlEvent = "pccEnabled"
+        self.clear_brake_resume()
+        carlog.info("Pedal longitudinal resumed by low-speed throttle tap")
+        return True
+    return False
 
   def handle_steering_disengage(self, steering_disengage):
     """Reset engagement on steering disengage rising edge."""
@@ -49,6 +97,7 @@ class PreAPEngagement:
       self.stalk_pull_time_ms = 0
       self.prev_stalk_pull_time_ms = -1000
       self.pending_cancel_at_ms = 0
+      self.clear_brake_resume()
       if was_long_active:
         self.longCtrlEvent = "pccDisabled"
     self.prev_steering_disengage = steering_disengage
@@ -66,6 +115,7 @@ class PreAPEngagement:
 
     # MAIN button: rising edge only
     if cruise_buttons == CruiseButtons.MAIN and prev_cruise_buttons != CruiseButtons.MAIN:
+      self.clear_brake_resume()
       carlog.debug("STALK MAIN | cruiseEnabled=%s enableLong=%s pending=%s pedal=%s doublePull=%s",
                    self.cruiseEnabled, self.enableLongControl, self.pending_enable,
                    use_pedal, self.enableDoublePull)
@@ -102,6 +152,10 @@ class PreAPEngagement:
     if use_pedal:
       if brake_rising_edge and self.cruiseEnabled and self.enableLongControl:
         carlog.debug("BRAKE rising edge — dropping longitudinal")
+        self.resume_target_kph = self.pedal_speed_kph
+        self.brake_paused_long = True
+        self.resume_ready_for_press = False
+        self.resume_press_ms = 0
         self.enableLongControl = False
         self.enableJustCC = True
         self.pending_enable = False
@@ -132,6 +186,7 @@ class PreAPEngagement:
     in_drive = gear_shifter == structs.CarState.GearShifter.drive
     can_engage = not door_open and in_drive and not seatbelt_unlatched
     if not can_engage and self.cruiseEnabled:
+      self.clear_brake_resume()
       carlog.debug("ENGAGE BLOCKED: door=%s gear=%s seatbelt=%s", door_open, gear_shifter, seatbelt_unlatched)
       self.cruiseEnabled = False
       self.enableLongControl = False
@@ -207,6 +262,7 @@ class PreAPEngagement:
       )
       if not is_echo:
         carlog.debug("STALK CANCEL — disabling all control")
+        self.clear_brake_resume()
         be.type = ButtonType.cancel
         was_long_active = self.enableLongControl
         self.cruiseEnabled = False

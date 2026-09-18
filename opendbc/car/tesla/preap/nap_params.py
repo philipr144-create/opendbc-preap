@@ -12,6 +12,7 @@ class NAPParamKeys:
   # Longitudinal Control
   ADAPTIVE_ACCEL = "NAPAdaptiveAccel"
   PEDAL_ENABLED = "NAPPedalEnabled"
+  BRAKE_THROTTLE_RESUME = "NAPBrakeThrottleResume"
   FOLLOW_DISTANCE = "NAPFollowDistance"
   
   # Pedal Hardware
@@ -52,6 +53,7 @@ DEFAULTS = {
   NAPParamKeys.TAP_LANE_CHANGE: False,
   NAPParamKeys.ADAPTIVE_ACCEL: True,
   NAPParamKeys.PEDAL_ENABLED: False,
+  NAPParamKeys.BRAKE_THROTTLE_RESUME: False,
   NAPParamKeys.FOLLOW_DISTANCE: 4,
   NAPParamKeys.PEDAL_PROFILE: 4,
   NAPParamKeys.PEDAL_CAN_BUS: 2,

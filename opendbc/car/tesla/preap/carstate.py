@@ -18,6 +18,18 @@ except ImportError:
 
 # Pre-AP door signal names from GTW_carState
 _DOORS = ("DOOR_STATE_FL", "DOOR_STATE_FR", "DOOR_STATE_RL", "DOOR_STATE_RR", "DOOR_STATE_FrontTrunk", "BOOT_STATE")
+_resume_toggle_last_read_ms = 0
+_resume_toggle_enabled = False
+
+
+def _brake_throttle_resume_enabled(curr_time_ms):
+  global _resume_toggle_last_read_ms, _resume_toggle_enabled
+  if _nap_params is None:
+    return False
+  if curr_time_ms - _resume_toggle_last_read_ms >= 1000:
+    _resume_toggle_last_read_ms = curr_time_ms
+    _resume_toggle_enabled = _nap_params.get_bool(NAPParamKeys.BRAKE_THROTTLE_RESUME)
+  return _resume_toggle_enabled
 
 
 def _current_time_millis():
@@ -170,6 +182,15 @@ def update_preap(cs, can_parsers):
   pedal_long_allowed = use_pedal and pedal_transform_valid
   long_control_allowed = (not use_pedal) or pedal_transform_valid
 
+  # Read fresh pedal feedback before evaluating a new resume gesture.
+  gas_sensor = cp_ap_party.vl.get("GAS_SENSOR", {})
+  cs.pedal.update(gas_sensor, curr_time_ms)
+  cs.pedal.update_torque(cp_pt.vl.get("DI_torque1", {}))
+  cs.pedal_interceptor_value = cs.pedal.interceptor_value
+  cs.pedal_timeout = cs.pedal.timeout
+  if use_pedal:
+    ret.gasPressed = cs.pedal.gas_pressed
+
   button_events = cs.engagement.process_buttons(
     cs.cruise_buttons, cs.prev_cruise_buttons, curr_time_ms,
     ret.vEgo, cs.speed_units, use_pedal, pedal_long_allowed,
@@ -179,7 +200,13 @@ def update_preap(cs, can_parsers):
   ret.buttonEvents = button_events
 
   can_engage = cs.engagement.check_can_engage(ret.doorOpen, ret.gearShifter, ret.seatbeltUnlatched)
+  cs.engagement.process_brake_resume(
+    curr_time_ms, ret.vEgo, real_brake_pressed, ret.gasPressed,
+    cs.pedal.available, pedal_long_allowed, can_engage,
+    _brake_throttle_resume_enabled(curr_time_ms))
   ret.cruiseState.enabled = cs.engagement.cruiseEnabled and can_engage
+  if cs.engagement.enableLongControl and use_pedal:
+    ret.cruiseState.speed = cs.engagement.pedal_speed_kph * CV.KPH_TO_MS
 
   # Bridge engagement state for carcontroller
   cs.cruiseEnabled = cs.engagement.cruiseEnabled
@@ -189,17 +216,6 @@ def update_preap(cs, can_parsers):
   cs.longCtrlEvent = cs.engagement.longCtrlEvent
   cs.preap_cc_cancel_needed = cs.engagement.preap_cc_cancel_needed
   cs.preap_cc_engage_needed = cs.engagement.preap_cc_engage_needed
-
-  # Comma Pedal parsing
-  gas_sensor = cp_ap_party.vl.get("GAS_SENSOR", {})
-  cs.pedal.update(gas_sensor, curr_time_ms)
-  cs.pedal.update_torque(cp_pt.vl.get("DI_torque1", {}))
-
-  cs.pedal_interceptor_value = cs.pedal.interceptor_value
-  cs.pedal_timeout = cs.pedal.timeout
-
-  if nap_conf.use_pedal:
-    ret.gasPressed = cs.pedal.gas_pressed
 
   cs.das_control = None
   cs.cruise_enabled_prev = ret.cruiseState.enabled
