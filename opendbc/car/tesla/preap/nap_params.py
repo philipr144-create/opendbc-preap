@@ -41,6 +41,7 @@ class NAPParamKeys:
   LANE_CENTERING_STRENGTH = "NAPLaneCenteringStrength"
   LOW_SPEED_STEERING_RATE = "NAPLowSpeedSteeringRate"
   NAVIGATION_MANEUVERS = "NAPNavigationManeuvers"
+  MAP_DRIVING_ASSIST = "NAPMapDrivingAssist"
   CORNER_ASSIST = "NAPCornerAssist"
 
   # Advanced / Developer
@@ -74,6 +75,7 @@ DEFAULTS = {
   NAPParamKeys.LANE_CENTERING_STRENGTH: 1,
   NAPParamKeys.LOW_SPEED_STEERING_RATE: True,
   NAPParamKeys.NAVIGATION_MANEUVERS: True,
+  NAPParamKeys.MAP_DRIVING_ASSIST: False,
   NAPParamKeys.CORNER_ASSIST: True,
   NAPParamKeys.PARKED_SIGNAL_TEST: False,
 }

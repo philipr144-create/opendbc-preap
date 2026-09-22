@@ -8,6 +8,7 @@ from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.tesla.values import DBC, CANBUS, GEAR_MAP, STEER_THRESHOLD
 from opendbc.car.tesla.preap.nap_params import NAPParamKeys
 from opendbc.car.tesla.preap.tap_lane_change import PhysicalStalk
+from opendbc.car.tesla.preap.resume_status import ResumeStatus
 from opendbc.car.tesla.preap.nap_conf import nap_conf, PEDAL_DI_PRESSED
 
 try:
@@ -33,7 +34,7 @@ def _brake_throttle_resume_enabled(curr_time_ms):
 
 
 def _current_time_millis():
-  return int(round(time.time() * 1000))
+  return int(round(time.monotonic() * 1000))
 
 
 def update_preap(cs, can_parsers):
@@ -204,6 +205,10 @@ def update_preap(cs, can_parsers):
     curr_time_ms, ret.vEgo, real_brake_pressed, ret.gasPressed,
     cs.pedal.available, pedal_long_allowed, can_engage,
     _brake_throttle_resume_enabled(curr_time_ms))
+  if not hasattr(cs, "resume_status"):
+    cs.resume_status = ResumeStatus()
+  cs.resume_status.publish(cs.engagement, real_brake_pressed, cs.pedal.available,
+                           can_engage, _brake_throttle_resume_enabled(curr_time_ms))
   ret.cruiseState.enabled = cs.engagement.cruiseEnabled and can_engage
   if cs.engagement.enableLongControl and use_pedal:
     ret.cruiseState.speed = cs.engagement.pedal_speed_kph * CV.KPH_TO_MS

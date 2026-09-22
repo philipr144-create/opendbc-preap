@@ -1,3 +1,5 @@
+import math
+
 from opendbc.car import structs
 from opendbc.car.carlog import carlog
 from opendbc.car.common.conversions import Conversions as CV
@@ -8,7 +10,10 @@ ButtonType = structs.CarState.ButtonEvent.Type
 # Echo filter windows: suppress auto-cancel echoes from spoofed stalk messages
 CANCEL_ECHO_WINDOW_MS = 600
 SPOOF_ECHO_WINDOW_MS = 300
-RESUME_MAX_SPEED_MS = 7.0 / 2.236936
+# Brake + throttle resume:
+# A fresh throttle tap must START at or below this speed.
+# Once a valid press has started, crossing this speed does not erase it.
+RESUME_MAX_SPEED_MS = 10.0 / 2.236936
 RESUME_TAP_MIN_MS = 50
 RESUME_TAP_MAX_MS = 800
 
@@ -44,6 +49,7 @@ class PreAPEngagement:
     self.resume_ready_for_press = False
     self.resume_press_ms = 0
     self.resume_prev_gas_pressed = False
+    self.resume_sequence = 0
 
   def clear_brake_resume(self):
     self.brake_paused_long = False
@@ -53,36 +59,93 @@ class PreAPEngagement:
   def process_brake_resume(self, curr_time_ms, v_ego, real_brake_pressed,
                            gas_pressed, pedal_available, pedal_long_allowed,
                            can_engage, enabled):
-    """Resume pedal longitudinal only after a fresh low-speed throttle tap."""
+    """Resume pedal longitudinal after a fresh low-speed throttle tap.
+
+    The tap must START below RESUME_MAX_SPEED_MS. Once a valid press has
+    started, vehicle speed is allowed to cross the threshold before release.
+    """
     gas_rising = gas_pressed and not self.resume_prev_gas_pressed
     gas_falling = not gas_pressed and self.resume_prev_gas_pressed
     self.resume_prev_gas_pressed = gas_pressed
 
+    # Hard interlocks. Losing any of these invalidates the resume sequence.
     if not (enabled and can_engage and self.cruiseEnabled and
-            pedal_available and pedal_long_allowed and self.brake_paused_long):
+            pedal_long_allowed and self.brake_paused_long):
       self.clear_brake_resume()
       return False
-    if real_brake_pressed or v_ego > RESUME_MAX_SPEED_MS:
+
+    # A transient feedback loss invalidates the gesture, not the driver brake pause.
+    # Recovery requires observing a released pedal and then a new rising edge.
+    if not pedal_available or not math.isfinite(v_ego) or v_ego < -0.1:
       self.resume_ready_for_press = False
       self.resume_press_ms = 0
       return False
 
-    # A pedal already down as the brake is released is not a fresh command.
+    # Brake must be fully released before a resume gesture can occur.
+    if real_brake_pressed:
+      self.resume_ready_for_press = False
+      self.resume_press_ms = 0
+      return False
+
+    # ----------------------------------------------------------
+    # An accepted press is already in progress.
+    #
+    # IMPORTANT: do not apply the vehicle-speed gate here.
+    # The driver may accelerate through RESUME_MAX_SPEED_MS during
+    # the tap without destroying the gesture.
+    # ----------------------------------------------------------
+    if self.resume_press_ms:
+      duration_ms = curr_time_ms - self.resume_press_ms
+
+      # A held accelerator is not a tap. Expire it rather than allowing
+      # a later release to unexpectedly resume longitudinal control.
+      if gas_pressed and duration_ms > RESUME_TAP_MAX_MS:
+        self.resume_press_ms = 0
+        self.resume_ready_for_press = False
+        return False
+
+      if gas_falling:
+        self.resume_press_ms = 0
+
+        if RESUME_TAP_MIN_MS <= duration_ms <= RESUME_TAP_MAX_MS:
+          self.resume_sequence += 1
+          self.enableLongControl = True
+          self.enableJustCC = False
+          self.pedal_speed_kph = self.resume_target_kph
+          self.longCtrlEvent = "pccEnabled"
+          self.clear_brake_resume()
+          carlog.info(
+            "Pedal longitudinal resumed by low-speed throttle tap "
+            "(duration=%dms)", duration_ms
+          )
+          return True
+
+        # Release was too quick/slow. Require a fresh gesture.
+        self.resume_ready_for_press = False
+
+      return False
+
+    # ----------------------------------------------------------
+    # No accepted press yet.
+    #
+    # Speed only gates STARTING the gesture.
+    # ----------------------------------------------------------
+    if v_ego > RESUME_MAX_SPEED_MS:
+      self.resume_ready_for_press = False
+      return False
+
+    # Accelerator must first be observed released. This prevents an
+    # accelerator already held while releasing the brake from counting
+    # as a resume command.
     if not gas_pressed and not self.resume_ready_for_press and not gas_falling:
       self.resume_ready_for_press = True
+
+    # Fresh accelerator rising edge while armed starts the tap.
     if self.resume_ready_for_press and gas_rising:
       self.resume_press_ms = curr_time_ms
-    if gas_falling and self.resume_press_ms:
-      duration_ms = curr_time_ms - self.resume_press_ms
-      self.resume_press_ms = 0
-      if RESUME_TAP_MIN_MS <= duration_ms <= RESUME_TAP_MAX_MS:
-        self.enableLongControl = True
-        self.enableJustCC = False
-        self.pedal_speed_kph = self.resume_target_kph
-        self.longCtrlEvent = "pccEnabled"
-        self.clear_brake_resume()
-        carlog.info("Pedal longitudinal resumed by low-speed throttle tap")
-        return True
+      carlog.debug("Brake/throttle resume tap started")
+      return False
+
     return False
 
   def handle_steering_disengage(self, steering_disengage):

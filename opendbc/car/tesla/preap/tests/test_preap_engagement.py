@@ -71,8 +71,10 @@ class TestPreAPBrakeDisengage(unittest.TestCase):
           step(2200, gas=True, enabled=False)
           step(2300)
         elif case == "fast":
-          step(2200, gas=True, speed=4.0)
-          step(2300, speed=4.0)
+          # Resume tap must START at or below 10 mph.
+          # 5.0 m/s = 11.18 mph, so this gesture must be rejected.
+          step(2200, gas=True, speed=5.0)
+          step(2300, speed=5.0)
         elif case == "stale_pedal":
           step(2200, gas=True, healthy=False)
           step(2300)

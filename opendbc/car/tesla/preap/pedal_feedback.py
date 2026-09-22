@@ -21,6 +21,8 @@ class PedalFeedback:
   def update(self, gas_sensor_msg, curr_time_ms):
     try:
       if not gas_sensor_msg:
+        self.available = False
+        self.timeout = True
         return False
 
       self.prev_idx = self.idx
