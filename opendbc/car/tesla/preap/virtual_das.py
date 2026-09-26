@@ -13,6 +13,7 @@ from numpy import clip, interp
 
 from opendbc.car.common.filter_simple import FirstOrderFilter, HighPassFilter
 from opendbc.car.common.pid import PIDController
+from opendbc.car.tesla.preap.accel_policy import limit_positive_accel
 from opendbc.car.tesla.preap.constants import (
   VDAS_INNER_K_BP, VDAS_INNER_KP_V, VDAS_INNER_KI_V,
   VDAS_FUTURE_T_BP, VDAS_FUTURE_T_V,
@@ -254,7 +255,7 @@ class VirtualDAS:
 
   def update(self, a_cmd: float, v_ego: float, prev_pedal_di: float,
              a_ego: float = 0.0, freeze_integrator: bool = False,
-             orientation_ned: list | None = None) -> float:
+             orientation_ned: list | None = None, personality=None) -> float:
     """Compute pedal DI from acceleration command.
 
     Args:
@@ -268,6 +269,8 @@ class VirtualDAS:
     Returns:
       pedal_di: output in DI units (caller converts to voltage via di_to_pedal)
     """
+    if personality is not None:
+      a_cmd = limit_positive_accel(a_cmd, self.jerk_limiter.a_limited, v_ego, personality, self.dt)
     a_limited = self.jerk_limiter.update(a_cmd)
 
     grade_accel, pitch_compensation = self.grade_estimator.update(

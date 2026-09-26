@@ -3,7 +3,7 @@ import numpy as np
 from opendbc.can import CANPacker
 from opendbc.car import Bus
 from opendbc.car.tesla.preap.nap_conf import nap_conf, PEDAL_DI_MIN, PEDAL_DI_ZERO
-from opendbc.car.tesla.preap.interface import get_preap_accel_limits
+from opendbc.car.tesla.preap.interface import get_preap_accel_limits, get_preap_personality
 from opendbc.car.tesla.pedal.controller import get_zero_torque
 from opendbc.car.tesla.preap.virtual_das import VirtualDAS
 from opendbc.car.tesla.preap.teslacan import TeslaCANPreAP
@@ -97,6 +97,7 @@ class PreAPLongController:
           if CS.out.gasPressed:
             # Gas pressed: driver is controlling. Pass through their foot
             # directly (enable=0) but track their position for smooth resume.
+            self.vdas.jerk_limiter.reset()
             self.prev_pedal_di = max(CS.pedal_interceptor_value, PEDAL_DI_ZERO)
             can_sends.append(tesla_can.create_pedal_command(0, enable=0))
 
@@ -113,7 +114,7 @@ class PreAPLongController:
             self.prev_pedal_di = self.vdas.update(
               accel_request, CS.out.vEgo, self.prev_pedal_di,
               a_ego=CS.out.aEgo, freeze_integrator=in_engage_grace,
-              orientation_ned=list(CC.orientationNED))
+              orientation_ned=list(CC.orientationNED), personality=get_preap_personality())
             pedal_cmd = nap_conf.di_to_pedal(self.prev_pedal_di)
             can_sends.append(tesla_can.create_pedal_command(pedal_cmd, enable=1))
 

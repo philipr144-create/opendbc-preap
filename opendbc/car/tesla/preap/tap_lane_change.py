@@ -295,6 +295,11 @@ class TapController:
         "signal_active": self.phase == "active" or bool(self.cleanup),
         "gesture": stalk.gesture,
         "physical_direction": stalk.direction,
+        # No detent bit exists in STW_ACTN_RQ. Require a physical press held
+        # beyond the tap window, observed from neutral, with fresh RX frames.
+        "manual_turn_direction": (stalk.direction if stalk.fresh(now)
+                                  and stalk.started is not None
+                                  and now - stalk.started > TAP_MAX else 0),
         "reason": self.reason,
       },
       now,

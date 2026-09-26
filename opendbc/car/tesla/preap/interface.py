@@ -1,15 +1,13 @@
-import numpy as np
-
 from opendbc.car import get_safety_config, structs, STD_CARGO_KG
 from opendbc.car.carlog import carlog
 from opendbc.car.tesla.preap.nap_conf import nap_conf
+from opendbc.car.tesla.preap.accel_policy import accel_ceiling
 
 # Safety param flags matching tesla_preap.h (renumbered — LONG_CONTROL removed as dead code)
 PREAP_FLAG_ENABLE_PEDAL = 1
 PREAP_FLAG_RADAR_EMULATION = 2
 PREAP_FLAG_RADAR_BEHIND_NOSECONE = 4
 from opendbc.car.tesla.preap.constants import (
-  ACCEL_PREAP_BP, ACCEL_PREAP_PROFILES,
   PEDAL_LONG_K_BP, PEDAL_LONG_KP_V, PEDAL_LONG_KI_V,
 )
 
@@ -20,15 +18,18 @@ except ImportError:
   _params = None
 
 
-def get_preap_accel_limits(current_speed):
+def get_preap_personality():
   personality = 1
   if _params is not None:
     try:
       personality = int(_params.get("LongitudinalPersonality", return_default=True))
     except (TypeError, ValueError):
       pass
-  profile = ACCEL_PREAP_PROFILES.get(personality, ACCEL_PREAP_PROFILES[1])
-  a_max = float(np.interp(current_speed, ACCEL_PREAP_BP, profile))
+  return personality
+
+
+def get_preap_accel_limits(current_speed):
+  a_max = accel_ceiling(current_speed, get_preap_personality())
   # Allow longcontrol to use VirtualDAS's complete regen range.
   return -2.5, a_max
 
