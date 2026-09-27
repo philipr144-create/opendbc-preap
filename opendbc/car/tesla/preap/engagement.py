@@ -180,9 +180,21 @@ class PreAPEngagement:
         self.longCtrlEvent = "pccDisabled"
     self.preap_brake_pressed_prev = real_brake_pressed
 
-    # Preserve the engagement-time cruise target. Curve and posted-speed
-    # assistance may cap the planner temporarily, but must not overwrite the
-    # driver's saved set speed. Physical stalk adjustments remain authoritative.
+    # Auto-update target speed when speed limit changes while driving
+    if use_pedal and self.enableLongControl:
+      try:
+        import os
+        if os.path.exists("/dev/shm/mpp_speed_limit"):
+          with open("/dev/shm/mpp_speed_limit", "r") as f:
+            val = f.read().strip()
+            limit_mps = float(val) if val else 0.0
+            if limit_mps > 0:
+              if not hasattr(self, "last_mpp_limit_mps"): self.last_mpp_limit_mps = 0.0
+              if limit_mps != self.last_mpp_limit_mps:
+                self.last_mpp_limit_mps = limit_mps
+                self.pedal_speed_kph = round((limit_mps * 2.236936) * 1.609344, 1)
+      except Exception:
+        pass
 
     return button_events
 
