@@ -19,7 +19,7 @@ from opendbc.car.tesla.pedal.controller import (
 class TestJerkLimiter:
 
   def test_step_response_bounded(self):
-    jl = JerkLimiter(j_max=2.5, dt=0.02)
+    jl = JerkLimiter(j_pos_max=2.5, j_neg_max=2.5, dt=0.02)
     da_max = 2.5 * 0.02
 
     prev = 0.0
@@ -29,13 +29,13 @@ class TestJerkLimiter:
       prev = out
 
   def test_step_response_reaches_target(self):
-    jl = JerkLimiter(j_max=2.5, dt=0.02)
+    jl = JerkLimiter(j_pos_max=2.5, j_neg_max=2.5, dt=0.02)
     for _ in range(200):
       out = jl.update(1.5)
     assert abs(out - 1.5) < 1e-6
 
   def test_ramp_tracking_below_jmax(self):
-    jl = JerkLimiter(j_max=2.5, dt=0.02)
+    jl = JerkLimiter(j_pos_max=2.5, j_neg_max=2.5, dt=0.02)
     slope = 1.0
 
     for i in range(50):
@@ -44,7 +44,7 @@ class TestJerkLimiter:
       assert abs(out - target) < 1e-6, f"Diverged at step {i}: {out} vs {target}"
 
   def test_ramp_tracking_above_jmax(self):
-    jl = JerkLimiter(j_max=2.5, dt=0.02)
+    jl = JerkLimiter(j_pos_max=2.5, j_neg_max=2.5, dt=0.02)
     slope = 5.0
 
     prev = 0.0
@@ -55,7 +55,7 @@ class TestJerkLimiter:
       prev = out
 
   def test_negative_step(self):
-    jl = JerkLimiter(j_max=2.5, dt=0.02)
+    jl = JerkLimiter(j_pos_max=2.5, j_neg_max=2.5, dt=0.02)
     jl.a_limited = 1.0
 
     prev = 1.0
@@ -65,7 +65,7 @@ class TestJerkLimiter:
       prev = out
 
   def test_reset(self):
-    jl = JerkLimiter(j_max=2.5, dt=0.02)
+    jl = JerkLimiter(j_pos_max=2.5, j_neg_max=2.5, dt=0.02)
     jl.update(2.0)
     jl.update(2.0)
     assert jl.a_limited > 0
@@ -73,7 +73,7 @@ class TestJerkLimiter:
     assert jl.a_limited == 0.5
 
   def test_reset_default(self):
-    jl = JerkLimiter(j_max=2.5, dt=0.02)
+    jl = JerkLimiter(j_pos_max=2.5, j_neg_max=2.5, dt=0.02)
     for _ in range(10):
       jl.update(1.0)
     jl.reset()
@@ -109,7 +109,7 @@ class TestVirtualDAS:
     vdas = VirtualDAS(dt=0.02)
     for _ in range(200):
       di = vdas.update(0.0, v_ego=15.0, prev_pedal_di=vdas.prev_pedal_di)
-    assert abs(di - PEDAL_DI_ZERO) < 1e-3
+    assert di == pytest.approx(vdas._feedforward(0.0, 15.0))
 
   def test_steady_state_max_accel(self):
     vdas = VirtualDAS(dt=0.02)
@@ -154,8 +154,8 @@ class TestVirtualDAS:
     vdas = VirtualDAS(dt=0.02)
     for _ in range(200):
       di = vdas.update(0.05, v_ego=15.0, prev_pedal_di=vdas.prev_pedal_di)
-    assert di > PEDAL_DI_ZERO - 1.0
-    assert di < PEDAL_DI_ZERO + 3.0
+    hold_di = vdas._feedforward(0.0, 15.0)
+    assert hold_di < di < hold_di + 3.0
 
   def test_negative_accel_produces_regen(self):
     vdas = VirtualDAS(dt=0.02)
@@ -246,8 +246,8 @@ class TestInnerPID:
 
     assert abs(vdas.inner_pid.i) < 1e-9
 
-  def test_integrator_accumulates_after_grace(self):
-    """After grace period ends, integrator should start correcting."""
+  def test_disabled_inner_integrator_does_not_duplicate_outer_trim(self):
+    """The current tune deliberately leaves feedback to LongControl."""
     vdas = VirtualDAS(dt=0.02)
 
     # Grace period: frozen
@@ -256,11 +256,11 @@ class TestInnerPID:
                   a_ego=0.0, freeze_integrator=True)
     assert abs(vdas.inner_pid.i) < 1e-9
 
-    # After grace: should accumulate
+    # After grace: the disabled inner loop must remain inactive
     for _ in range(100):
       vdas.update(1.0, v_ego=15.0, prev_pedal_di=vdas.prev_pedal_di,
                   a_ego=0.0, freeze_integrator=False)
-    assert abs(vdas.inner_pid.i) > 0.01
+    assert vdas.inner_pid.i == 0.0
 
   def test_anti_windup(self):
     """Integrator should be bounded by PID pos/neg limits."""
@@ -281,8 +281,9 @@ class TestInnerPID:
       vdas.update(2.0, v_ego=15.0, prev_pedal_di=vdas.prev_pedal_di,
                   a_ego=0.5)
 
-    assert abs(vdas.inner_pid.i) > 0.01
+    assert vdas.inner_pid.i == 0.0
     assert abs(vdas.a_ego_filter.x) > 0
+    vdas.inner_pid.i = .2  # Exercise reset even though feedback is disabled.
 
     vdas.reset()
     assert vdas.inner_pid.i == 0.0
@@ -322,20 +323,21 @@ class TestFeedforwardModel:
   def _fixtures(self, mock_nap_conf, mock_zero_torque):
     pass
 
-  def test_default_table_matches_legacy_at_grid_points(self):
-    """Default FF table should match the old 3-breakpoint interp at grid points."""
+  def test_default_table_with_road_load_at_grid_points(self):
+    """Table interpolation preserves the existing road-load feedforward."""
     from opendbc.car.tesla.preap.virtual_das import FeedforwardModel
     from opendbc.car.tesla.preap.ff_table_default import SPEED_BP, ACCEL_BP, DEFAULT_TABLE
 
+    from opendbc.car.tesla.preap.virtual_das import ROAD_LOAD_SPEED_BP, ROAD_LOAD_HOLD_DI, ROAD_LOAD_FADE_DECEL
     ff = FeedforwardModel(table_path="/nonexistent")
 
     for si, speed in enumerate(SPEED_BP):
       max_pedal = float(np.interp(speed, PEDAL_BP, PEDAL_MAX_VALUES))
       for ai, accel in enumerate(ACCEL_BP):
-        expected = float(np.interp(accel,
-                                   [REGEN_MAX, 0.0, ACCEL_MAX],
-                                   [PEDAL_DI_MIN, 0.0, max_pedal]))
-        # FF model with zero_torque_di=0 should match legacy interp
+        road_load = float(np.interp(speed, ROAD_LOAD_SPEED_BP, ROAD_LOAD_HOLD_DI))
+        blend = float(np.clip((accel - ROAD_LOAD_FADE_DECEL) / -ROAD_LOAD_FADE_DECEL, 0., 1.))
+        expected = DEFAULT_TABLE[si][ai] + road_load * blend
+        # Zero-torque is zero here; road-load support is still active.
         got = ff.get(accel, speed, zero_torque_di=0.0)
         assert abs(got - expected) < 0.5, \
           f"Mismatch at speed={speed}, accel={accel}: got={got:.2f}, expected={expected:.2f}"
@@ -369,7 +371,8 @@ class TestFeedforwardModel:
 
     ff = FeedforwardModel(table_path="/nonexistent")
     di = ff.get(0.05, 15.0, zero_torque_di=3.0)
-    assert abs(di - 3.0) < 2.0  # near zero-torque, not a big jump
+    hold_di = ff.get(0.0, 15.0, zero_torque_di=3.0)
+    assert 0.0 < di - hold_di < 2.0  # Smooth relative to road-load-supported hold.
 
   def test_json_override_loads(self, tmp_path):
     """Custom JSON table overrides the default."""
@@ -390,7 +393,7 @@ class TestFeedforwardModel:
     ff = FeedforwardModel(table_path=str(path))
     assert ff.speed_bp == [0.0, 40.0]
     di = ff.get(2.5, 20.0, zero_torque_di=0.0)
-    assert abs(di - 100.0) < 0.5
+    assert di == pytest.approx(106.5)  # Override table plus existing road load at 20 m/s.
 
   def test_invalid_json_falls_back_to_default(self, tmp_path):
     """Corrupted JSON file should fall back to defaults."""

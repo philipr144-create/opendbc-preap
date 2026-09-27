@@ -13,7 +13,7 @@ from numpy import clip, interp
 
 from opendbc.car.common.filter_simple import FirstOrderFilter, HighPassFilter
 from opendbc.car.common.pid import PIDController
-from opendbc.car.tesla.preap.accel_policy import limit_positive_accel
+from opendbc.car.tesla.preap.accel_policy import limit_positive_accel, limit_regen_release
 from opendbc.car.tesla.preap.constants import (
   VDAS_INNER_K_BP, VDAS_INNER_KP_V, VDAS_INNER_KI_V,
   VDAS_FUTURE_T_BP, VDAS_FUTURE_T_V,
@@ -271,6 +271,9 @@ class VirtualDAS:
     """
     if personality is not None:
       a_cmd = limit_positive_accel(a_cmd, self.jerk_limiter.a_limited, v_ego, personality, self.dt)
+      # Keep existing low-speed stop/launch release; ease rolling curve exits.
+      if v_ego >= 5.0:
+        a_cmd = limit_regen_release(a_cmd, self.jerk_limiter.a_limited, personality, self.dt)
     a_limited = self.jerk_limiter.update(a_cmd)
 
     grade_accel, pitch_compensation = self.grade_estimator.update(
