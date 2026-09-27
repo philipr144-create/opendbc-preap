@@ -10,6 +10,7 @@ PREAP_FLAG_RADAR_BEHIND_NOSECONE = 4
 from opendbc.car.tesla.preap.constants import (
   PEDAL_LONG_K_BP, PEDAL_LONG_KP_V, PEDAL_LONG_KI_V,
 )
+from opendbc.car.tesla.preap.nap_conf import REGEN_MAX
 
 try:
   from openpilot.common.params import Params as _Params
@@ -82,9 +83,12 @@ def get_preap_params(ret, fingerprint):
   ret.vEgoStopping = 0.1
   ret.vEgoStarting = 0.1
 
-  # Use a controlled regen ramp for planned stops.
-  ret.stopAccel = -1.5
-  ret.stoppingDecelRate = 1.0
+  # Pre-AP has regen-only longitudinal actuation. Once shouldStop is
+  # asserted, use the complete calibrated regen range. Match the stop-state
+  # ramp to VirtualDAS's negative jerk limit so the request becomes firm
+  # immediately without adding a second, slower artificial ramp.
+  ret.stopAccel = REGEN_MAX
+  ret.stoppingDecelRate = 2.5
 
   # Pre-AP Model S is physically the same platform as HW1/HW2/HW3 Model S.
   # Vehicle params (mass=2100, wheelbase=2.960, steerRatio=15.0) come from
