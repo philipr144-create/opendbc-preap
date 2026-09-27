@@ -59,25 +59,46 @@ class PreAPEngagement:
   def process_brake_resume(self, curr_time_ms, v_ego, real_brake_pressed,
                            gas_pressed, pedal_available, pedal_long_allowed,
                            can_engage, enabled):
-      gas_rising = gas_pressed and not getattr(self, "resume_prev_gas_pressed", False)
+      gas_rising = gas_pressed and not self.resume_prev_gas_pressed
+      gas_falling = not gas_pressed and self.resume_prev_gas_pressed
       self.resume_prev_gas_pressed = gas_pressed
 
       if not (enabled and can_engage and self.cruiseEnabled and pedal_long_allowed):
         self.clear_brake_resume()
         return False
 
-      import math
-      if real_brake_pressed or not pedal_available or not math.isfinite(v_ego) or v_ego < -0.1 or v_ego > RESUME_MAX_SPEED_MS:
+      if real_brake_pressed or not pedal_available or not math.isfinite(v_ego) or v_ego < -0.1:
+        self.resume_ready_for_press = False
+        self.resume_press_ms = 0
         return False
 
       if gas_rising and not self.enableLongControl:
-        self.enableLongControl = True
-        self.enableJustCC = False
-        if self.resume_target_kph > 0:
-          self.pedal_speed_kph = self.resume_target_kph
-        self.longCtrlEvent = "pccEnabled"
-        self.clear_brake_resume()
-        return True
+        # The tap must begin at or below the resume-speed ceiling. Once a
+        # valid press begins, crossing the ceiling does not invalidate it.
+        if v_ego <= RESUME_MAX_SPEED_MS:
+          self.resume_ready_for_press = True
+          self.resume_press_ms = curr_time_ms
+        return False
+
+      if self.resume_ready_for_press and gas_pressed:
+        if curr_time_ms - self.resume_press_ms > RESUME_TAP_MAX_MS:
+          self.resume_ready_for_press = False
+          self.resume_press_ms = 0
+        return False
+
+      if self.resume_ready_for_press and gas_falling:
+        duration = curr_time_ms - self.resume_press_ms
+        self.resume_ready_for_press = False
+        self.resume_press_ms = 0
+        if RESUME_TAP_MIN_MS <= duration <= RESUME_TAP_MAX_MS and not self.enableLongControl:
+          self.enableLongControl = True
+          self.enableJustCC = False
+          if self.resume_target_kph > 0:
+            self.pedal_speed_kph = self.resume_target_kph
+          self.longCtrlEvent = "pccEnabled"
+          self.brake_paused_long = False
+          self.resume_sequence += 1
+          return True
 
       return False
 
@@ -159,21 +180,9 @@ class PreAPEngagement:
         self.longCtrlEvent = "pccDisabled"
     self.preap_brake_pressed_prev = real_brake_pressed
 
-    # Auto-update target speed when speed limit changes while driving
-    if use_pedal and self.enableLongControl:
-      try:
-        import os
-        if os.path.exists("/dev/shm/mpp_speed_limit"):
-          with open("/dev/shm/mpp_speed_limit", "r") as f:
-            val = f.read().strip()
-            limit_mps = float(val) if val else 0.0
-            if limit_mps > 0:
-              if not hasattr(self, "last_mpp_limit_mps"): self.last_mpp_limit_mps = 0.0
-              if limit_mps != self.last_mpp_limit_mps:
-                self.last_mpp_limit_mps = limit_mps
-                self.pedal_speed_kph = round((limit_mps * 2.236936) * 1.609344, 1)
-      except Exception:
-        pass
+    # Preserve the engagement-time cruise target. Curve and posted-speed
+    # assistance may cap the planner temporarily, but must not overwrite the
+    # driver's saved set speed. Physical stalk adjustments remain authoritative.
 
     return button_events
 

@@ -24,6 +24,17 @@ class TestPreAPBrakeDisengage(unittest.TestCase):
       use_pedal=use_pedal, pedal_long_allowed=use_pedal,
       long_control_allowed=True, real_brake_pressed=False)
 
+  def test_active_cruise_target_survives_speed_limit_changes(self):
+    eng = self._make_engagement()
+    self._engage_single_pull(eng)
+    eng.pedal_speed_kph = 72.4  # 45 mph driver target
+    eng.process_buttons(
+      cruise_buttons=0, prev_cruise_buttons=0,
+      curr_time_ms=2000, v_ego=13.4, speed_units="MPH",
+      use_pedal=True, pedal_long_allowed=True,
+      long_control_allowed=True, real_brake_pressed=False)
+    self.assertEqual(eng.pedal_speed_kph, 72.4)
+
   def test_brake_drops_longitudinal_keeps_lateral(self):
     # This is the core invariant: brake drops pedal but keeps steering.
     eng = self._make_engagement()
