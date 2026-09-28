@@ -177,8 +177,7 @@ class CarController(CarControllerBase):
 
     elif self.low_speed_turn_takeover_latched:
       steering_centered = (
-        not blinker_on
-        and not driver_pulling
+        not driver_pulling
         and abs(CS.out.steeringAngleDeg) <= 10.0
         and abs(actuators.steeringAngleDeg) <= 10.0
         and abs(
@@ -192,6 +191,9 @@ class CarController(CarControllerBase):
       else:
         self.low_speed_turn_reacquire_timer = 0
 
+      # A lingering indicator is intent, not continuing driver override.
+      # Reacquire only after 0.5 s of quiet, aligned, centered steering;
+      # never reacquire mid-corner merely because the hands-on timer elapsed.
       # Require 0.5 second of continuously aligned, centered steering.
       if self.low_speed_turn_reacquire_timer >= 50:
         self.low_speed_turn_takeover_latched = False
