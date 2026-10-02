@@ -4,7 +4,7 @@ import numpy as np
 from opendbc.car.tesla.preap.constants import ACCEL_PREAP_BP, ACCEL_PREAP_PROFILES
 
 # Positive acceleration rise, m/s^3. This state is independent of plan source.
-ACCEL_RISE = {0: 0.60, 1: 0.40, 2: 0.20}
+ACCEL_RISE = {0: 0.60, 1: 0.40, 2: 0.30}
 
 
 def personality_index(personality):
