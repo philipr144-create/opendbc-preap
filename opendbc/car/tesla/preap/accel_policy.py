@@ -43,3 +43,8 @@ def limit_regen_release(request, previous, personality, dt):
   time_to_zero = -previous / release
   ceiling = previous + release * dt if dt <= time_to_zero else rise * (dt - time_to_zero)
   return min(request, ceiling)
+
+
+def limit_engage_accel(request, progress, ceiling):
+  """Engagement softens added propulsion; regen retains full authority."""
+  return min(request, max(0.0, min(1.0, progress)) * max(0.0, ceiling))

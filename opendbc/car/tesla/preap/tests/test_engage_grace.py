@@ -21,6 +21,7 @@ import unittest
 import numpy as np
 
 from opendbc.car.tesla.preap.constants import ACCEL_PREAP_BP, ACCEL_PREAP_PROFILES
+from opendbc.car.tesla.preap.accel_policy import limit_engage_accel
 
 # Mirror the constants from carcontroller.py so the test fails loudly if
 # they're renamed or retuned without updating the test.
@@ -46,8 +47,7 @@ def engage_grace_ramp(accel_request: float, engage_elapsed_frames: int,
   if engage_elapsed_frames >= ENGAGE_GRACE_FRAMES:
     return accel_request
   grace_progress = engage_elapsed_frames / ENGAGE_GRACE_FRAMES
-  accel_cap = grace_progress * engage_a_max
-  return max(0.0, min(accel_request, accel_cap))
+  return limit_engage_accel(accel_request, grace_progress, engage_a_max)
 
 
 class TestEngageGraceInvariant(unittest.TestCase):
@@ -76,8 +76,10 @@ class TestEngageGraceInvariant(unittest.TestCase):
           msg = f"v={v_ego} a_cmd={accel_request} f={frame}: output {output:.4f}"
           self.assertLessEqual(output, ceiling + 1e-9,
                                f"{msg} > ceiling {ceiling:.4f}")
-          self.assertGreaterEqual(output, 0.0,
-                                  f"{msg} < 0.0 (regen during grace forbidden)")
+          if accel_request < 0.0:
+            self.assertEqual(output, accel_request, "Engage grace must preserve braking")
+          else:
+            self.assertGreaterEqual(output, 0.0)
 
   def test_drive3_stab_scenario(self):
     """The original failure: MPC asks 0.934 m/s² from engage at v=6.59.
@@ -146,15 +148,14 @@ class TestEngageGraceInvariant(unittest.TestCase):
                               f"output decreased at frame {f}: {out} < {prev}")
       prev = out
 
-  def test_negative_request_clamped_to_zero(self):
-    """Regen commands during grace are forbidden (safety — prevents
-    the zero-torque-learning-on-engage regen spike)."""
+  def test_negative_request_preserved_during_grace(self):
+    """Requested braking passes through; VirtualDAS bounds negative jerk."""
     v_ego = 10.0
     a_max = a_max_at_speed(v_ego)
 
     for frame in [0, 10, 25, 40, 49]:
       out = engage_grace_ramp(-0.5, frame, a_max)
-      self.assertEqual(out, 0.0, f"negative request not clamped at frame {frame}")
+      self.assertEqual(out, -0.5, f"braking request suppressed at frame {frame}")
 
   def test_post_grace_passes_request_through(self):
     """Once grace_elapsed >= ENGAGE_GRACE_FRAMES, the ramp is inactive

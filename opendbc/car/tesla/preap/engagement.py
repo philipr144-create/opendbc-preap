@@ -11,11 +11,12 @@ ButtonType = structs.CarState.ButtonEvent.Type
 CANCEL_ECHO_WINDOW_MS = 600
 SPOOF_ECHO_WINDOW_MS = 300
 # Brake + throttle resume:
-# A fresh throttle tap must START at or below this speed.
+# A fresh throttle press must START at or below this speed.
+# Resume only on release; accept a deliberate brief hold as well as a tap.
 # Once a valid press has started, crossing this speed does not erase it.
 RESUME_MAX_SPEED_MS = 10.0 / 2.236936
 RESUME_TAP_MIN_MS = 50
-RESUME_TAP_MAX_MS = 800
+RESUME_TAP_MAX_MS = 2500
 
 
 class PreAPEngagement:
@@ -65,6 +66,11 @@ class PreAPEngagement:
 
       if not (enabled and can_engage and self.cruiseEnabled and pedal_long_allowed):
         self.clear_brake_resume()
+        return False
+
+      if not self.brake_paused_long:
+        self.resume_ready_for_press = False
+        self.resume_press_ms = 0
         return False
 
       if real_brake_pressed or not pedal_available or not math.isfinite(v_ego) or v_ego < -0.1:

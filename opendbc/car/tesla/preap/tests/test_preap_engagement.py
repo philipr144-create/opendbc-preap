@@ -83,7 +83,7 @@ class TestPreAPBrakeDisengage(unittest.TestCase):
           step(2300, brake=True)
         else:
           step(2200, gas=True)
-          step(3200)
+          step(4800)
         self.assertFalse(eng.enableLongControl)
 
   def test_brake_no_effect_without_pedal(self):

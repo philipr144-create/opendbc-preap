@@ -6,6 +6,7 @@ from opendbc.car.tesla.preap.nap_conf import nap_conf, PEDAL_DI_MIN, PEDAL_DI_ZE
 from opendbc.car.tesla.preap.interface import get_preap_accel_limits, get_preap_personality
 from opendbc.car.tesla.pedal.controller import get_zero_torque
 from opendbc.car.tesla.preap.virtual_das import VirtualDAS
+from opendbc.car.tesla.preap.accel_policy import limit_engage_accel
 from opendbc.car.tesla.preap.teslacan import TeslaCANPreAP
 from opendbc.car.tesla.values import CANBUS, CruiseButtons
 from opendbc.car.carlog import carlog
@@ -19,8 +20,8 @@ def init_preap_can(dbc_names, packers):
 
 
 # Grace period after engage: ramp accel limit from 0 → full over this window.
-# Prevents both regen spike (negative) and pedal stab (MPC requesting high
-# positive accel on frame 1). Inspired by Tinkla's proportional ramp.
+# Prevents a pedal stab from a large positive request on frame 1.
+# Negative stop/lead/model requests retain authority through this window.
 ENGAGE_GRACE_FRAMES = 50  # 0.5s at 100Hz
 
 
@@ -108,8 +109,7 @@ class PreAPLongController:
               # tuned accel-profile envelope, not the live MPC request.
               # Keeps an MPC outlier on engage from propagating through.
               grace_progress = engage_elapsed_frames / ENGAGE_GRACE_FRAMES
-              accel_cap = grace_progress * self.engage_a_max
-              accel_request = max(0.0, min(accel_request, accel_cap))
+              accel_request = limit_engage_accel(accel_request, grace_progress, self.engage_a_max)
 
             self.prev_pedal_di = self.vdas.update(
               accel_request, CS.out.vEgo, self.prev_pedal_di,
