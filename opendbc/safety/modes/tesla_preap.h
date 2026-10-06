@@ -470,6 +470,9 @@ static bool tesla_preap_tx_hook(const CANPacket_t *msg) {
     if (GET_BUS(msg) != 0 || GET_LEN(msg) != 8) { return false; }
     const uint8_t *d = msg->data;
     if (d[6] != 0U || d[7] != 0U) { return false; }
+    bool dtc_read = d[0] == 3U && d[1] == 0x19U && d[2] == 2U && d[3] == 0xFFU && d[4] == 0U && d[5] == 0U;
+    bool dtc_flow = d[0] == 0x30U && d[1] == 0U && d[2] == 0U && d[3] == 0U && d[4] == 0U && d[5] == 0U;
+    if (dtc_read || dtc_flow) { return true; }
     // Only recovered single-frame commands. Cleanup remains available at speed.
     bool session = d[0] == 2U && d[1] == 0x10U && d[3] == 0U && d[4] == 0U && d[5] == 0U;
     bool routine = d[0] == 4U && d[1] == 0x31U && d[3] == 3U && d[5] == 0U;

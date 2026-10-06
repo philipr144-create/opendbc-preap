@@ -138,7 +138,9 @@ class TeslaPreAPTestMixin(common.CarSafetyTest, common.AngleSteeringSafetyTest):
     for corner in range(4):
       self.assertTrue(tx(f'06 31 01 03 34 {corner:02x} 00 00'))
     for bad in ('06 31 01 03 34 04 00 00', '06 31 01 03 34 00 01 00',
-                '04 31 01 03 15 00 00 00', '02 11 01 00 00 00 00 00'):
+                '04 31 01 03 15 00 00 00', '02 11 01 00 00 00 00 00',
+                '04 14 ff ff ff 00 00 00', '03 19 02 00 00 00 00 00',
+                '30 01 00 00 00 00 00 00'):
       self.assertFalse(tx(bad))
     self.assertFalse(tx(vent, 1))
     self.safety.set_timer(1250000)
@@ -149,7 +151,8 @@ class TeslaPreAPTestMixin(common.CarSafetyTest, common.AngleSteeringSafetyTest):
     self.assertFalse(tx(vent))
     for cleanup in ('04 31 02 03 34 00 00 00', '04 31 01 03 09 00 00 00',
                     '04 31 02 03 09 00 00 00', '04 31 03 03 09 00 00 00',
-                    '04 31 02 03 10 00 00 00', '02 10 01 00 00 00 00 00'):
+                    '04 31 02 03 10 00 00 00', '03 19 02 ff 00 00 00 00',
+                    '30 00 00 00 00 00 00 00', '02 10 01 00 00 00 00 00'):
       self.assertTrue(tx(cleanup))
 
   def _speed_msg_2(self, speed):
