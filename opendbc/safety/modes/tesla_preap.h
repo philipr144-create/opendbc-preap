@@ -88,6 +88,10 @@ static bool preap_radar_emulation = false;
 static bool preap_radar_behind_nosecone = false;
 
 static int preap_pedal_can = -1;
+// EAS manual starts require a fresh ESP_B sample strictly below 40 mph.
+static uint32_t preap_eas_speed_ts = 0U;
+static bool preap_eas_speed_seen = false;
+static bool preap_eas_speed_ok = false;
 
 // Gear and door checks
 static int preap_gear = 4;        // init to Drive to avoid false disables on startup
@@ -385,6 +389,9 @@ static void tesla_preap_rx_hook(const CANPacket_t *msg) {
 
   // Vehicle speed (ESP_B: 0x155) — derive vehicle_moving from actual speed
   if (msg->addr == 0x155U) {
+    preap_eas_speed_ts = microsecond_timer_get();
+    preap_eas_speed_seen = true;
+    preap_eas_speed_ok = (((msg->data[5] << 8) | msg->data[6]) < 6437);
     float speed = (((msg->data[5] << 8) | msg->data[6]) * 0.01f) * KPH_TO_MS;
     UPDATE_VEHICLE_SPEED(speed);
     vehicle_moving = speed > (0.5f * KPH_TO_MS);
@@ -459,6 +466,22 @@ static void tesla_preap_rx_hook(const CANPacket_t *msg) {
 // ============================================
 
 static bool tesla_preap_tx_hook(const CANPacket_t *msg) {
+  if (msg->addr == 0x64BU) {
+    if (GET_BUS(msg) != 0 || GET_LEN(msg) != 8) { return false; }
+    const uint8_t *d = msg->data;
+    if (d[6] != 0U || d[7] != 0U) { return false; }
+    // Only recovered single-frame commands. Cleanup remains available at speed.
+    bool session = d[0] == 2U && d[1] == 0x10U && d[3] == 0U && d[4] == 0U && d[5] == 0U;
+    bool routine = d[0] == 4U && d[1] == 0x31U && d[3] == 3U && d[5] == 0U;
+    if ((session && d[2] == 1U) ||
+        (routine && d[2] == 2U && d[4] == 0x34U) ||
+        (routine && (d[2] == 1U || d[2] == 2U) && d[4] == 9U)) { return true; }
+    bool fresh_low_speed = preap_eas_speed_seen && preap_eas_speed_ok &&
+      (microsecond_timer_get() - preap_eas_speed_ts < 250000U);
+    bool vent = d[0] == 6U && d[1] == 0x31U && d[2] == 1U && d[3] == 3U && d[4] == 0x34U && d[5] <= 3U;
+    bool setup = (session && d[2] == 3U) || (routine && d[2] == 1U && d[4] == 0x10U);
+    return fresh_low_speed && (vent || setup);
+  }
   const AngleSteeringLimits PREAP_STEERING_LIMITS = {
     .max_angle = 3600,  // 360 deg, EPAS faults above this
     .angle_deg_to_can = 10,
@@ -573,6 +596,9 @@ static safety_config tesla_preap_init(uint16_t param) {
   preap_radar_emulation = GET_FLAG(param, PREAP_FLAG_RADAR_EMULATION);
   preap_radar_behind_nosecone = GET_FLAG(param, PREAP_FLAG_RADAR_BEHIND_NOSECONE);
 
+  preap_eas_speed_seen = false;
+  preap_eas_speed_ok = false;
+  preap_eas_speed_ts = 0U;
   preap_gear = 4;
   preap_gear_prev = 4;
   preap_doors_open = false;
@@ -584,6 +610,7 @@ static safety_config tesla_preap_init(uint16_t param) {
 
   // TX whitelist — no harness relay on Pre-AP
   static const CanMsg PREAP_TX_MSGS[] = {
+    {0x64B, 0, 8, .check_relay = false, .disable_static_blocking = true},  // Narrow EAS commands
     {0x488, 0, 4, .check_relay = false, .disable_static_blocking = true},  // DAS_steeringControl
     {0x2B9, 0, 8, .check_relay = false, .disable_static_blocking = true},  // DAS_control
     {0x214, 0, 3, .check_relay = false, .disable_static_blocking = true},  // EPB_epasControl

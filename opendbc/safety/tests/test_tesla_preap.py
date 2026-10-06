@@ -61,6 +61,7 @@ class TeslaPreAPTestMixin(common.CarSafetyTest, common.AngleSteeringSafetyTest):
   FWD_BLACKLISTED_ADDRS = {}
 
   TX_MSGS = [
+    [0x64B, 0],
     [0x488, 0],  # DAS_steeringControl
     [0x2B9, 0],  # DAS_control
     [0x214, 0],  # EPB_epasControl
@@ -123,6 +124,32 @@ class TeslaPreAPTestMixin(common.CarSafetyTest, common.AngleSteeringSafetyTest):
   def _speed_msg(self, speed):
     values = {"ESP_vehicleSpeed": speed * 3.6}  # m/s to kph
     return self.packer.make_can_msg_safety("ESP_B", 0, values)
+
+  def test_eas_allowlist_and_speed_gate(self):
+    def tx(hex_data, bus=0):
+      return self._tx(common.make_msg(bus, 0x64B, 8, bytes.fromhex(hex_data)))
+    vent = '06 31 01 03 34 00 00 00'
+    self.assertFalse(tx(vent))  # No speed yet.
+    self.safety.set_timer(1000000)
+    self._rx(self._speed_msg(39 * .44704))
+    self.assertTrue(tx(vent))
+    self.assertTrue(tx('02 10 03 00 00 00 00 00'))
+    self.assertTrue(tx('04 31 01 03 10 00 00 00'))
+    for corner in range(4):
+      self.assertTrue(tx(f'06 31 01 03 34 {corner:02x} 00 00'))
+    for bad in ('06 31 01 03 34 04 00 00', '06 31 01 03 34 00 01 00',
+                '04 31 01 03 15 00 00 00', '02 11 01 00 00 00 00 00'):
+      self.assertFalse(tx(bad))
+    self.assertFalse(tx(vent, 1))
+    self.safety.set_timer(1250000)
+    self.assertFalse(tx(vent))
+    self._rx(self._speed_msg(40 * .44704))
+    self.assertFalse(tx(vent))
+    self._rx(self._speed_msg(41 * .44704))
+    self.assertFalse(tx(vent))
+    for cleanup in ('04 31 02 03 34 00 00 00', '04 31 01 03 09 00 00 00',
+                    '04 31 02 03 09 00 00 00', '02 10 01 00 00 00 00 00'):
+      self.assertTrue(tx(cleanup))
 
   def _speed_msg_2(self, speed):
     return None  # Pre-AP has no second speed source

@@ -1,0 +1,493 @@
+import numpy as np
+import types
+from dataclasses import replace
+import copy
+from opendbc.can import CANPacker
+from opendbc.car import Bus
+from opendbc.car.lateral import apply_steer_angle_limits_vm
+from opendbc.car.interfaces import CarControllerBase
+from opendbc.car.tesla.teslacan import TeslaCAN
+from opendbc.car.tesla.teslacan_legacy import TeslaCANRaven
+from opendbc.car.tesla.values import CarControllerParams, CANBUS, LEGACY_CARS, CAR
+from opendbc.car.vehicle_model import VehicleModel
+from opendbc.car.tesla.preap.carcontroller import PreAPLongController, init_preap_can
+from opendbc.car.tesla.preap.stock_cc_spoofer import StockCCSpoofer
+
+def get_safety_CP():
+  from opendbc.car.tesla.interface import CarInterface
+  return CarInterface.get_non_essential_params("TESLA_MODEL_Y")
+
+class CarController(CarControllerBase):
+  def __init__(self, dbc_names, CP):
+    super().__init__(dbc_names, CP)
+    self.apply_angle_last = 0
+    self.packer = CANPacker(dbc_names[Bus.party])
+    self.tesla_can = TeslaCAN(self.packer)
+
+    self.VM = VehicleModel(get_safety_CP())
+
+    if CP.carFingerprint in LEGACY_CARS:
+      if CP.carFingerprint in (CAR.TESLA_MODEL_S_HW1, CAR.TESLA_MODEL_X_HW1, CAR.TESLA_MODEL_S_PREAP):
+        CANBUS.powertrain = CANBUS.party
+        CANBUS.autopilot_powertrain = CANBUS.autopilot_party
+
+      self.packers = {CANBUS.party: CANPacker(dbc_names[Bus.party]), CANBUS.powertrain: CANPacker(dbc_names[Bus.pt])}
+
+      if CP.carFingerprint == CAR.TESLA_MODEL_S_PREAP:
+        self.preap_long = PreAPLongController()
+        self.stock_cc = StockCCSpoofer()
+        self.tesla_can = init_preap_can(dbc_names, self.packers)
+      else:
+        self.tesla_can = TeslaCANRaven(self.packers)
+
+      from opendbc.car.tesla.interface import CarInterface
+      self.VM = VehicleModel(CarInterface.get_non_essential_params("TESLA_MODEL_S_HW3"))
+
+  def update(self, CC, CS, now_nanos):
+    if self.CP.carFingerprint == CAR.TESLA_MODEL_S_PREAP:
+      return self._update_preap(CC, CS)
+
+    actuators = CC.actuators
+    can_sends = []
+
+    lat_active = CC.latActive and CS.hands_on_level < 3
+
+    if self.frame % 2 == 0:
+      try:
+        auto_res = __import__("json").load(open("/data/nap_settings.json")).get("auto_resume", False)
+      except:
+        auto_res = False
+
+      target_angle = CS.out.steeringAngleDeg if ((CS.out.steeringPressed or getattr(CS, "hands_on_level", 0) >= 3) and auto_res) else actuators.steeringAngleDeg
+      self.apply_angle_last = apply_steer_angle_limits_vm(target_angle, self.apply_angle_last, CS.out.vEgoRaw, CS.out.steeringAngleDeg,
+                                                          lat_active, CarControllerParams, self.VM)
+      if self.CP.carFingerprint in LEGACY_CARS:
+        cntr = (self.frame // 2) % 16
+        can_sends.append(self.tesla_can.create_steering_control(cntr, self.apply_angle_last, lat_active))
+      else:
+        can_sends.append(self.tesla_can.create_steering_control(self.apply_angle_last, lat_active))
+
+    if self.frame % 10 == 0:
+      if self.CP.carFingerprint in LEGACY_CARS and self.CP.carFingerprint not in (CAR.TESLA_MODEL_S_HW1, CAR.TESLA_MODEL_X_HW1):
+        cntr = (self.frame // 10) % 16
+        can_sends.append(self.tesla_can.create_steering_allowed(cntr))
+      elif self.CP.carFingerprint not in LEGACY_CARS:
+        can_sends.append(self.tesla_can.create_steering_allowed())
+
+    if self.CP.openpilotLongitudinalControl:
+      if self.frame % 4 == 0:
+        state = 13 if CC.cruiseControl.cancel else 4
+        accel = float(np.clip(actuators.accel, CarControllerParams.ACCEL_MIN, CarControllerParams.ACCEL_MAX))
+        cntr = (self.frame // 4) % 8
+        can_sends.append(self.tesla_can.create_longitudinal_command(state, accel, cntr, CS.out.vEgo, CC.longActive))
+    else:
+      if CC.cruiseControl.cancel:
+        cntr = (CS.das_control["DAS_controlCounter"] + 1) % 8
+        can_sends.append(self.tesla_can.create_longitudinal_command(13, 0, cntr, CS.out.vEgo, False))
+
+    new_actuators = actuators.as_builder()
+    new_actuators.steeringAngleDeg = self.apply_angle_last
+
+    self.frame += 1
+    return new_actuators, can_sends
+
+  def _update_preap(self, CC, CS):
+    actuators = CC.actuators
+    can_sends = []
+
+
+    # ========================================================
+    # PRE-AP BLINKER-GATED LOW-SPEED STEERING PROFILE
+    #
+    # >= 25 MPH:
+    #   Existing normal/easy HSO behavior.
+    #
+    # < 25 MPH + BLINKER OFF:
+    #   Existing normal/easy HSO behavior.
+    #
+    # < 25 MPH + BLINKER ON:
+    #   Increased tolerance for normal low-speed tire/rack
+    #   steering load and less restrictive angle-rate governor.
+    #
+    # Driver takeover is ALWAYS retained.
+    # hands_on_level >= 3 ALWAYS wins.
+    # ========================================================
+
+    if not hasattr(self, 'hso_timer'):
+      self.hso_timer = 0
+
+    if not hasattr(self, 'hso_reacquire_timer'):
+      self.hso_reacquire_timer = 0
+
+    speed_mph = CS.out.vEgo * 2.236936
+    blinker_on = CS.out.leftBlinker or CS.out.rightBlinker
+
+    hands_on_level = getattr(CS, "hands_on_level", 0)
+    driver_torque = abs(CS.out.steeringTorque)
+
+    LOW_SPEED_FULL_MPH = 5.0
+    LOW_SPEED_END_MPH = 25.0
+
+    low_speed_turn_profile = (
+      blinker_on and
+      speed_mph < LOW_SPEED_END_MPH
+    )
+
+    # ========================================================
+    # DRIVER OVERRIDE / HSO
+    # ========================================================
+
+    if low_speed_turn_profile:
+
+      # ------------------------------------------------------
+      # BLINKER ON + BELOW 25 MPH
+      #
+      # Preserve the SAME maximum HSO torque allowance already
+      # used by the previous tune.
+      #
+      # <= 5 mph : 4.20 Nm
+      #   10 mph : 3.78 Nm
+      #   15 mph : 3.35 Nm
+      #   20 mph : 2.93 Nm
+      #   25 mph : 2.50 Nm
+      #
+      # We are NOT making takeover harder than the existing
+      # low-speed HSO configuration.
+      # ------------------------------------------------------
+
+      speed_fraction = (
+        (speed_mph - LOW_SPEED_FULL_MPH) /
+        (LOW_SPEED_END_MPH - LOW_SPEED_FULL_MPH)
+      )
+
+      speed_fraction = max(
+        0.0,
+        min(1.0, speed_fraction)
+      )
+
+      torque_thresh = 4.20 - (1.70 * speed_fraction)
+
+      # Definite/strong driver takeover.
+      hard_driver_override = hands_on_level >= 3
+
+      # Driver can ALSO take over directly through torsion-bar
+      # torque. Level 3 is NOT the only takeover mechanism.
+      torque_driver_override = (
+        driver_torque > torque_thresh and
+        CS.out.vEgo > 0.3
+      )
+
+      driver_pulling = (
+        hard_driver_override or
+        torque_driver_override
+      )
+
+    else:
+
+      # ======================================================
+      # NORMAL HSO
+      #
+      # Applies to:
+      #
+      #   * >=25 mph
+      #   * <25 mph without blinker
+      #
+      # At road speeds this retains the existing easy/manual
+      # takeover behavior. You do NOT need to reach
+      # hands_on_level 3 before openpilot yields.
+      # ======================================================
+
+      if blinker_on:
+        driver_pulling = (
+          driver_torque > 2.5 or
+          hands_on_level >= 3
+        )
+
+      else:
+        driver_pulling = (
+          CS.out.steeringPressed or
+          hands_on_level >= 3
+        )
+
+    # ========================================================
+    # HSO LATCH
+    # ========================================================
+
+    if driver_pulling:
+      self.hso_timer = 50
+
+    overriding = self.hso_timer > 0
+
+    if overriding:
+      self.hso_timer -= 1
+
+      # After the driver gives the wheel back, blend back into
+      # the planner instead of immediately chasing a large
+      # accumulated steering-angle difference.
+      self.hso_reacquire_timer = 18
+
+    lat_active = CC.latActive and not overriding
+
+    # ========================================================
+    # STEERING COMMAND
+    # ========================================================
+
+    if self.frame % 2 == 0:
+
+      desired_angle = actuators.steeringAngleDeg
+
+      if overriding:
+
+        # Driver owns steering.
+        #
+        # Keep OP's previous-angle reference synchronized with
+        # the ACTUAL steering wheel angle.
+        #
+        # This prevents OP from holding onto an old/stale
+        # command while you are steering.
+        target_angle = CS.out.steeringAngleDeg
+        self.apply_angle_last = CS.out.steeringAngleDeg
+
+      else:
+
+        target_angle = desired_angle
+
+        # ====================================================
+        # SMOOTH REACQUISITION
+        #
+        # Avoid:
+        #
+        # actual wheel = 10 deg
+        # planner      = 35 deg
+        # OP resumes   = immediately chase 35 deg
+        #
+        # Instead smoothly blend back over ~0.36 sec.
+        # ====================================================
+
+        if self.hso_reacquire_timer > 0:
+
+          total_reacquire_frames = 18
+
+          progress = (
+            total_reacquire_frames -
+            self.hso_reacquire_timer +
+            1
+          ) / total_reacquire_frames
+
+          progress = max(
+            0.0,
+            min(1.0, progress)
+          )
+
+          target_angle = (
+            CS.out.steeringAngleDeg +
+            (
+              desired_angle -
+              CS.out.steeringAngleDeg
+            ) * progress
+          )
+
+          self.hso_reacquire_timer -= 1
+
+      # ======================================================
+      # LOW-SPEED EPAS FOLLOWING ENVELOPE
+      #
+      # PURPOSE:
+      #
+      # At crawl speed the Tesla EPAS can sometimes remain near
+      # center while openpilot's requested angle continues moving
+      # farther ahead.
+      #
+      # That can create:
+      #
+      #   actual wheel  ~=   0 deg
+      #   OP command    ->  30, 40, 50+ deg
+      #
+      # Then, once the rack finally begins moving, EPAS can
+      # suddenly chase the accumulated command and yank the wheel.
+      #
+      # Instead, during BLINKER-GATED parking-speed turns, keep
+      # OP's request reasonably close to the ACTUAL rack position.
+      #
+      # IMPORTANT:
+      #
+      # This does NOT bypass:
+      #   * apply_steer_angle_limits_vm()
+      #   * Tesla angle limits
+      #   * Tesla angle-rate limits
+      #   * Panda safety
+      #   * HSO / driver takeover
+      #
+      # It is an ADDITIONAL conservative limit.
+      # ======================================================
+
+      if (
+        low_speed_turn_profile and
+        lat_active and
+        speed_mph < 12.0
+      ):
+
+        actual_angle = float(
+          CS.out.steeringAngleDeg
+        )
+
+        actual_abs = abs(actual_angle)
+
+        # ----------------------------------------------------
+        # CENTER BREAKAWAY REGION
+        #
+        # Near center:
+        #   don't let OP accumulate a giant steering request
+        #   while waiting for EPAS/rack motion.
+        #
+        # Once the rack physically begins moving:
+        #   progressively permit more command lead.
+        # ----------------------------------------------------
+
+        CENTER_BAND_DEG = 3.0
+        FULL_FOLLOW_BAND_DEG = 15.0
+
+        CENTER_MAX_LEAD_DEG = 18.0
+        MOVING_MAX_LEAD_DEG = 28.0
+
+        rack_progress = (
+          (actual_abs - CENTER_BAND_DEG) /
+          (FULL_FOLLOW_BAND_DEG - CENTER_BAND_DEG)
+        )
+
+        rack_progress = max(
+          0.0,
+          min(1.0, rack_progress)
+        )
+
+        max_epas_lead_deg = (
+          CENTER_MAX_LEAD_DEG +
+          (
+            MOVING_MAX_LEAD_DEG -
+            CENTER_MAX_LEAD_DEG
+          ) * rack_progress
+        )
+
+        # Keep requested angle close enough to the physical rack
+        # that EPAS cannot build a huge stored catch-up request.
+        target_angle = float(
+          np.clip(
+            target_angle,
+            actual_angle - max_epas_lead_deg,
+            actual_angle + max_epas_lead_deg,
+          )
+        )
+
+      # ======================================================
+      # LOW-SPEED STEERING RATE
+      #
+      # IMPORTANT CHANGE
+      #
+      # Existing tune:
+      #
+      # <=5 mph = 45% steering-rate allowance
+      #
+      # That can make OP fall badly behind the planned path.
+      #
+      # New BLINKER-GATED tune:
+      #
+      # <=5 mph : 75%
+      #  10 mph : ~81%
+      #  15 mph : 87.5%
+      #  20 mph : ~94%
+      #  25 mph : 100%
+      #
+      # BLINKER OFF:
+      # No special low-speed rate profile.
+      # ======================================================
+
+      # ------------------------------------------------------------
+      # Pre-AP low-speed steering-rate boost
+      #
+      # Tesla's VM steering limiter actually uses:
+      #   ANGLE_LIMITS.MAX_ANGLE_RATE
+      #
+      # Give both turn-in and re-centering more rate below 25 mph.
+      #
+      # Local Tesla stock value is 7 deg / 20 ms frame.
+      #
+      # Profile:
+      #   <=5 mph : 9.00
+      #    10 mph : 8.50
+      #    15 mph : 8.00
+      #    20 mph : 7.50
+      #    25 mph : 7.00 (stock)
+      #
+      # apply_steer_angle_limits_vm() still enforces:
+      #   - vehicle-model lateral jerk limit
+      #   - vehicle-model lateral acceleration limit
+      #   - maximum steering angle
+      # ------------------------------------------------------------
+      params_to_use = CarControllerParams
+
+      if speed_mph < 25.0:
+        # Make a temporary params subclass so the global Tesla
+        # CarControllerParams object is never modified.
+        class PreAPLowSpeedParams(CarControllerParams):
+          pass
+
+        # ANGLE_LIMITS is a dataclass-style object. Copy it before
+        # changing MAX_ANGLE_RATE so this frame cannot mutate the
+        # global Tesla limits.
+        PreAPLowSpeedParams.ANGLE_LIMITS = copy.copy(
+          CarControllerParams.ANGLE_LIMITS
+        )
+
+        speed_fraction = max(
+          0.0,
+          min(1.0, (speed_mph - 5.0) / 20.0)
+        )
+
+        # 9.0 at <=5 mph -> 7.0 at 25 mph.
+        PreAPLowSpeedParams.ANGLE_LIMITS.MAX_ANGLE_RATE = (
+          9.0 - (2.0 * speed_fraction)
+        )
+
+        params_to_use = PreAPLowSpeedParams
+
+      self.apply_angle_last = apply_steer_angle_limits_vm(
+        target_angle,
+        self.apply_angle_last,
+        CS.out.vEgoRaw,
+        CS.out.steeringAngleDeg,
+        lat_active,
+        params_to_use,
+        self.VM,
+      )
+
+      cntr = (self.frame // 2) % 16
+
+      can_sends.append(
+        self.tesla_can.create_steering_control(
+          cntr,
+          self.apply_angle_last,
+          lat_active,
+        )
+      )
+
+      can_sends.append(
+        self.tesla_can.create_epas_control(
+          cntr,
+          1,
+        )
+      )
+
+    CS.pccEvent = None
+
+    if self.CP.openpilotLongitudinalControl:
+      can_sends.extend(self.preap_long.update(CC, CS, self.frame, self.tesla_can, CANBUS.party))
+
+    can_sends.extend(self.stock_cc.update(CS, self.frame, self.tesla_can, CANBUS.party))
+    if self.stock_cc.pcc_event:
+      CS.pccEvent = self.stock_cc.pcc_event
+
+    new_actuators = actuators.as_builder()
+    new_actuators.steeringAngleDeg = self.apply_angle_last
+
+    self.frame += 1
+    return new_actuators, can_sends
