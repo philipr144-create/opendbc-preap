@@ -474,8 +474,8 @@ static bool tesla_preap_tx_hook(const CANPacket_t *msg) {
     bool session = d[0] == 2U && d[1] == 0x10U && d[3] == 0U && d[4] == 0U && d[5] == 0U;
     bool routine = d[0] == 4U && d[1] == 0x31U && d[3] == 3U && d[5] == 0U;
     if ((session && d[2] == 1U) ||
-        (routine && d[2] == 2U && d[4] == 0x34U) ||
-        (routine && (d[2] == 1U || d[2] == 2U) && d[4] == 9U)) { return true; }
+        (routine && d[2] == 2U && (d[4] == 0x34U || d[4] == 0x10U)) ||
+        (routine && (d[2] == 1U || d[2] == 2U || d[2] == 3U) && d[4] == 9U)) { return true; }
     bool fresh_low_speed = preap_eas_speed_seen && preap_eas_speed_ok &&
       (microsecond_timer_get() - preap_eas_speed_ts < 250000U);
     bool vent = d[0] == 6U && d[1] == 0x31U && d[2] == 1U && d[3] == 3U && d[4] == 0x34U && d[5] <= 3U;

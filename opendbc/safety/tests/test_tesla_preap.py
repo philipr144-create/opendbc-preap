@@ -148,7 +148,8 @@ class TeslaPreAPTestMixin(common.CarSafetyTest, common.AngleSteeringSafetyTest):
     self._rx(self._speed_msg(41 * .44704))
     self.assertFalse(tx(vent))
     for cleanup in ('04 31 02 03 34 00 00 00', '04 31 01 03 09 00 00 00',
-                    '04 31 02 03 09 00 00 00', '02 10 01 00 00 00 00 00'):
+                    '04 31 02 03 09 00 00 00', '04 31 03 03 09 00 00 00',
+                    '04 31 02 03 10 00 00 00', '02 10 01 00 00 00 00 00'):
       self.assertTrue(tx(cleanup))
 
   def _speed_msg_2(self, speed):
