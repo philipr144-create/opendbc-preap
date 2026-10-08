@@ -3,10 +3,12 @@ import math
 from opendbc.car.tesla.values import STEER_THRESHOLD
 
 
-def takeover_torque_threshold(speed_mps):
+def takeover_torque_threshold(speed_mps, city_turn=False):
   speed_mph = speed_mps * 2.236936
   if not math.isfinite(speed_mph):
     return STEER_THRESHOLD
+  if city_turn and 0.0 <= speed_mph < 25.0:
+    return 3.0
   if speed_mph <= 5.0:
     return 2.50
   if speed_mph < 10.0:

@@ -9,7 +9,7 @@ from opendbc.car.tesla.values import DBC, CANBUS, GEAR_MAP, STEER_THRESHOLD
 from opendbc.car.tesla.preap.nap_params import NAPParamKeys
 from opendbc.car.tesla.preap.tap_lane_change import PhysicalStalk
 from opendbc.car.tesla.preap.resume_status import ResumeStatus
-from opendbc.car.tesla.preap.steering_override import hands_on_override
+from opendbc.car.tesla.preap.steering_override import hands_on_override, takeover_torque_threshold
 from opendbc.car.tesla.preap.nap_conf import nap_conf, PEDAL_DI_PRESSED
 
 try:
@@ -98,6 +98,9 @@ def update_preap(cs, can_parsers):
       hso_torque_threshold = 1.50 - ((speed_mph - 15.0) / 5.0) * (1.50 - STEER_THRESHOLD)
     else:
       hso_torque_threshold = STEER_THRESHOLD
+
+    if bool(ret.leftBlinker) != bool(ret.rightBlinker):
+      hso_torque_threshold = takeover_torque_threshold(ret.vEgo, city_turn=True)
 
     is_overriding = (abs(ret.steeringTorque) > hso_torque_threshold or hands_on_override(cs.hands_on_level, ret.steeringTorque, hso_torque_threshold)) and ret.vEgo > 0.3
     override_filter = 2 if speed_mph < 25.0 else 5

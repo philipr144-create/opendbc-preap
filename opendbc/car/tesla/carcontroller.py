@@ -150,7 +150,7 @@ class CarController(CarControllerBase):
     # At highway speed, level-1 contact uses carState's sustained torque
     # filter rather than bypassing it through this controller-side check.
     hands_on_trigger = (hands_on_override(hands_on_level, CS.out.steeringTorque,
-                                         takeover_torque_threshold(CS.out.vEgo))
+                                         takeover_torque_threshold(CS.out.vEgo, city_turn=blinker_on))
                         if speed_mph < 25.0 else hands_on_level >= 2)
 
     driver_pulling = (
