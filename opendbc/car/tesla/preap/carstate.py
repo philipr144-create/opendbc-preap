@@ -100,11 +100,12 @@ def update_preap(cs, can_parsers):
       hso_torque_threshold = STEER_THRESHOLD
 
     is_overriding = (abs(ret.steeringTorque) > hso_torque_threshold or hands_on_override(cs.hands_on_level, ret.steeringTorque, hso_torque_threshold)) and ret.vEgo > 0.3
+    override_filter = 2 if speed_mph < 25.0 else 5
     # Do not retain a half-second counter tail after effort is released.
-    # The controller owns the 0.20 s quiet handback dwell. Two-frame entry filtering avoids the old half-second detection delay.
+    # The controller owns the 0.20 s quiet handback dwell. Fast entry stays below 25 mph; highway torque requires sustained evidence.
     if not is_overriding:
-      cs.steering_pressed_cnt = min(cs.steering_pressed_cnt, 2)
-    ret.steeringPressed = cs.update_steering_pressed(is_overriding, 2)
+      cs.steering_pressed_cnt = min(cs.steering_pressed_cnt, override_filter)
+    ret.steeringPressed = cs.update_steering_pressed(is_overriding, override_filter)
   else:
     ret.steeringPressed = cs.update_steering_pressed(abs(ret.steeringTorque) > STEER_THRESHOLD, 5)
 
