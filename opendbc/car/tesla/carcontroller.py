@@ -14,6 +14,7 @@ from opendbc.car.tesla.preap.stock_cc_spoofer import StockCCSpoofer
 from opendbc.car.tesla.preap.parked_signal_test import ParkedSignalTest
 from opendbc.car.tesla.preap.tap_lane_change import NavigationSignalController, TapController
 from opendbc.car.tesla.preap.nap_params import NAPParamKeys
+from opendbc.car.tesla.preap.steering_override import hands_on_override
 
 def get_safety_CP():
   from opendbc.car.tesla.interface import CarInterface
@@ -145,8 +146,8 @@ class CarController(CarControllerBase):
       0,
     )
 
-    # Any EPAS driver-effort level yields; never mask effort during a turn.
-    hands_on_trigger = hands_on_level > 0
+    # Level-1 contact needs torque evidence; stronger effort yields immediately.
+    hands_on_trigger = hands_on_override(hands_on_level, CS.out.steeringTorque)
 
     driver_pulling = (
       CS.out.steeringPressed

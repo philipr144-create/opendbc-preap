@@ -9,6 +9,7 @@ from opendbc.car.tesla.values import DBC, CANBUS, GEAR_MAP, STEER_THRESHOLD
 from opendbc.car.tesla.preap.nap_params import NAPParamKeys
 from opendbc.car.tesla.preap.tap_lane_change import PhysicalStalk
 from opendbc.car.tesla.preap.resume_status import ResumeStatus
+from opendbc.car.tesla.preap.steering_override import hands_on_override
 from opendbc.car.tesla.preap.nap_conf import nap_conf, PEDAL_DI_PRESSED
 
 try:
@@ -98,7 +99,7 @@ def update_preap(cs, can_parsers):
     else:
       hso_torque_threshold = STEER_THRESHOLD
 
-    is_overriding = (abs(ret.steeringTorque) > hso_torque_threshold or cs.hands_on_level > 0) and ret.vEgo > 0.3
+    is_overriding = (abs(ret.steeringTorque) > hso_torque_threshold or hands_on_override(cs.hands_on_level, ret.steeringTorque)) and ret.vEgo > 0.3
     # Do not retain a half-second counter tail after effort is released.
     # The controller owns the 0.20 s quiet handback dwell. Two-frame entry filtering avoids the old half-second detection delay.
     if not is_overriding:
