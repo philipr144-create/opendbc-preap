@@ -13,7 +13,7 @@ ACCEL_PREAP_BP = [0.0, 1.3, 7.5, 8.9408, 11.176, 13.4112, 15.0, 17.8816, 22.352,
 ACCEL_PREAP_PROFILES = {
   0: [0.4, 0.8, 1.1, 1.081, 1.051, 1.021, 1, 0.957, 0.89, 0.85, 0.832, 0.787, 0.7],  # aggressive
   1: [0.3, 0.7, 1, 0.981, 0.951, 0.921, 0.9, 0.871, 0.826, 0.8, 0.782, 0.737, 0.65],  # standard
-  2: [0.24, 0.42, 0.68, 0.70, 0.68, 0.65, 0.62, 0.59, 0.56, 0.54, 0.52, 0.50, 0.47],  # relaxed: gentle launch, smooth pickup
+  2: [0.14, 0.24, 0.34, 0.35, 0.35, 0.38, 0.42, 0.50, 0.56, 0.54, 0.52, 0.50, 0.47],  # relaxed: gentle launch, smooth pickup
 }
 
 # When following a lead car, cap positive accel to these values regardless

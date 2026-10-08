@@ -127,10 +127,7 @@ class CarController(CarControllerBase):
 
     low_speed_turn_profile = (
       speed_mph < 25.0
-      and (
-        blinker_on
-        or self.low_speed_turn_exit_timer > 0
-      )
+      and blinker_on
     )
 
     sub15_turn_context = (
@@ -148,13 +145,8 @@ class CarController(CarControllerBase):
       0,
     )
 
-    # Retain the existing protection from level-1 EPAS effort while
-    # openpilot is performing the wide turn. SteeringPressed and hands-on
-    # level 2+ still yield immediately.
-    hands_on_trigger = (
-      hands_on_level
-      > (1 if low_speed_turn_profile else 0)
-    )
+    # Any EPAS driver-effort level yields; never mask effort during a turn.
+    hands_on_trigger = hands_on_level > 0
 
     driver_pulling = (
       CS.out.steeringPressed

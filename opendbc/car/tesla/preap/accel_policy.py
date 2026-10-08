@@ -26,6 +26,8 @@ def limit_positive_accel(request, previous, speed, personality, dt):
   if request <= 0.0:
     return request
   rise = ACCEL_RISE.get(personality_index(personality), ACCEL_RISE[1])
+  if personality_index(personality) == 2:
+    rise = float(np.interp(speed, [0.0, 11.176, 15.6464], [0.18, 0.18, 0.30]))
   return min(request, accel_ceiling(speed, personality), max(0.0, previous) + rise * dt)
 
 
