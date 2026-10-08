@@ -183,15 +183,9 @@ class TestEngageGraceSourceDrift(unittest.TestCase):
     with open(src_path) as f:
       src = f.read()
 
-    # These three ingredients together encode the invariant
-    self.assertIn(
-      "engage_a_max", src,
-      "carcontroller.py no longer snapshots engage_a_max; "
-      + "grace-period cap may have reverted to MPC-request-scaled")
-    self.assertIn("grace_progress", src,
-                  "carcontroller.py dropped grace_progress ramp")
-    self.assertIn("get_preap_accel_limits", src,
-                  "carcontroller.py no longer pulls a_max from the accel profile")
+    self.assertNotIn("in_engage_grace", src)
+    self.assertIn("a_init=float(CS.out.aEgo)", src)
+    self.assertIn("pedal_di_init=self.prev_pedal_di", src)
 
 
 if __name__ == "__main__":

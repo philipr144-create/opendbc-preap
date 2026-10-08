@@ -53,13 +53,13 @@ class TestPreAPBrakeDisengage(unittest.TestCase):
     self.assertFalse(step(2010, brake=True))
     self.assertFalse(step(2100))
     self.assertFalse(eng.enableLongControl)
-    self.assertFalse(step(2200, gas=True))
-    self.assertTrue(step(2320))
+    self.assertTrue(step(2200, gas=True))
+    self.assertFalse(step(2320))
     self.assertTrue(eng.enableLongControl)
     self.assertEqual(eng.pedal_speed_kph, previous_target)
 
   def test_brake_throttle_resume_interlocks(self):
-    for case in ("disabled", "fast", "stale_pedal", "brake", "long_press"):
+    for case in ("disabled", "fast", "stale_pedal", "brake"):
       with self.subTest(case=case):
         eng = self._make_engagement()
         self._engage_single_pull(eng)

@@ -55,6 +55,7 @@ def update_preap(cs, can_parsers):
   ret.brake = 0
   real_brake_pressed = cp_chassis.vl["BrakeMessage"]["driverBrakeStatus"] == 2
   ret.brakePressed = real_brake_pressed
+  ret.brake = 1.0 if real_brake_pressed else 0.0
 
   # --- HUMAN STEERING OVERRIDE (HSO) V3 ---
   ENABLE_HSO = True 
@@ -98,6 +99,10 @@ def update_preap(cs, can_parsers):
       hso_torque_threshold = STEER_THRESHOLD
 
     is_overriding = abs(ret.steeringTorque) > hso_torque_threshold and ret.vEgo > 0.3
+    # Do not retain a half-second counter tail after effort is released.
+    # The controller owns the 0.20 s quiet handback dwell. Entry filtering stays intact.
+    if not is_overriding:
+      cs.steering_pressed_cnt = min(cs.steering_pressed_cnt, 50)
     ret.steeringPressed = cs.update_steering_pressed(is_overriding, 50)
   else:
     ret.steeringPressed = cs.update_steering_pressed(abs(ret.steeringTorque) > STEER_THRESHOLD, 5)

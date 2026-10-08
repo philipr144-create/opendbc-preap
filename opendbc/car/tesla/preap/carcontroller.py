@@ -3,10 +3,9 @@ import numpy as np
 from opendbc.can import CANPacker
 from opendbc.car import Bus
 from opendbc.car.tesla.preap.nap_conf import nap_conf, PEDAL_DI_MIN, PEDAL_DI_ZERO
-from opendbc.car.tesla.preap.interface import get_preap_accel_limits, get_preap_personality
+from opendbc.car.tesla.preap.interface import get_preap_personality
 from opendbc.car.tesla.pedal.controller import get_zero_torque
 from opendbc.car.tesla.preap.virtual_das import VirtualDAS
-from opendbc.car.tesla.preap.accel_policy import limit_engage_accel
 from opendbc.car.tesla.preap.teslacan import TeslaCANPreAP
 from opendbc.car.tesla.values import CANBUS, CruiseButtons
 from opendbc.car.carlog import carlog
@@ -17,12 +16,6 @@ def init_preap_can(dbc_names, packers):
   tesla_can = TeslaCANPreAP(packers)
   tesla_can.pedal_can_bus = nap_conf.pedal_can_bus
   return tesla_can
-
-
-# Grace period after engage: ramp accel limit from 0 → full over this window.
-# Prevents a pedal stab from a large positive request on frame 1.
-# Negative stop/lead/model requests retain authority through this window.
-ENGAGE_GRACE_FRAMES = 50  # 0.5s at 100Hz
 
 
 class PreAPLongController:
@@ -37,10 +30,6 @@ class PreAPLongController:
     self.prev_enable_long_control = False
     self.prev_requested_long = False
     self.prev_preap_long_active = False
-    self.preap_long_engage_frame = -1000000
-    # Snapshot of max-accel-at-engage-speed; used as the deterministic
-    # ceiling for the grace-period ramp. Set fresh on each engage rising edge.
-    self.engage_a_max = 0.0
     self.vdas = VirtualDAS(dt=0.02)
 
   def update(self, CC, CS, frame, tesla_can, can_bus_party):
@@ -63,14 +52,10 @@ class PreAPLongController:
     # --- Engage transition ---
     requested_long_rising = (not self.prev_requested_long) and requested_long
     if requested_long_rising:
-      self.preap_long_engage_frame = frame
       zero_torque_di = get_zero_torque().get(CS.out.vEgo)
       self.prev_pedal_di = max(CS.pedal_interceptor_value, zero_torque_di)
-      self.vdas.reset(a_init=0.0, pedal_di_init=self.prev_pedal_di)
-      _, self.engage_a_max = get_preap_accel_limits(CS.out.vEgo)
+      self.vdas.reset(a_init=float(CS.out.aEgo), pedal_di_init=self.prev_pedal_di)
 
-    engage_elapsed_frames = frame - self.preap_long_engage_frame
-    in_engage_grace = engage_elapsed_frames < ENGAGE_GRACE_FRAMES
 
     # --- Stock CC cancel triggers from pedal mode ---
     # Engage / disengage / button-press in pedal mode all need to drop stock
@@ -104,21 +89,18 @@ class PreAPLongController:
 
           elif long_active:
             accel_request = float(actuators.accel)
-            if in_engage_grace:
-              # Cap at grace_progress * engage_a_max so the ceiling is the
-              # tuned accel-profile envelope, not the live MPC request.
-              # Keeps an MPC outlier on engage from propagating through.
-              grace_progress = engage_elapsed_frames / ENGAGE_GRACE_FRAMES
-              accel_request = limit_engage_accel(accel_request, grace_progress, self.engage_a_max)
+            if not self.prev_preap_long_active:
+              self.prev_pedal_di = float(CS.pedal_interceptor_value)
+              self.vdas.reset(a_init=float(CS.out.aEgo), pedal_di_init=self.prev_pedal_di)
 
             self.prev_pedal_di = self.vdas.update(
               accel_request, CS.out.vEgo, self.prev_pedal_di,
-              a_ego=CS.out.aEgo, freeze_integrator=in_engage_grace,
+              a_ego=CS.out.aEgo, freeze_integrator=False,
               orientation_ned=list(CC.orientationNED), personality=get_preap_personality())
             pedal_cmd = nap_conf.di_to_pedal(self.prev_pedal_di)
             can_sends.append(tesla_can.create_pedal_command(pedal_cmd, enable=1))
 
-            if self.prev_pedal_di <= 0.95 * PEDAL_DI_MIN and not in_engage_grace:
+            if self.prev_pedal_di <= 0.95 * PEDAL_DI_MIN:
               CS.pccEvent = "pedalMaxRegen"
 
           else:
@@ -149,5 +131,6 @@ class PreAPLongController:
             can_sends.append(tesla_can.create_pedal_command(idle_pedal, enable=0))
         self.prev_pedal_di = 0.0
 
-    self.prev_preap_long_active = long_active
+    if frame % 2 == 0:
+      self.prev_preap_long_active = long_active and pedal_engaged and not CS.out.gasPressed
     return can_sends

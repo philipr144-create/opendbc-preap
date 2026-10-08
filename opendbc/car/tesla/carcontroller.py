@@ -107,12 +107,12 @@ class CarController(CarControllerBase):
 
     # Shared gate for low-speed steering rate and HSO sensitivity.
     speed_mph = CS.out.vEgo * 2.236936
-    blinker_on = CS.out.leftBlinker or CS.out.rightBlinker
+    blinker_on = bool(CS.out.leftBlinker) != bool(CS.out.rightBlinker)
 
     # PREAP_LOW_SPEED_TURN_TAKEOVER_LATCH_V1
     # Preserve the wider low-speed turn profile when openpilot remains in
     # control. If the driver takes over below 15 mph during that maneuver,
-    # remain yielded until both requested and actual steering are centered.
+    # resume from the measured angle after 0.20 s without driver effort.
     if not hasattr(self, "low_speed_turn_exit_timer"):
       self.low_speed_turn_exit_timer = 0
 
@@ -162,7 +162,7 @@ class CarController(CarControllerBase):
     )
 
     if driver_pulling:
-      self.hso_timer = 50
+      self.hso_timer = 20 if blinker_on and speed_mph < 25.0 else 50
 
     # A takeover that begins during a sub-15-mph turn remains latched.
     # This prevents the 0.5-second HSO timer from expiring while the model
@@ -176,28 +176,15 @@ class CarController(CarControllerBase):
       self.low_speed_turn_reacquire_timer = 0
 
     elif self.low_speed_turn_takeover_latched:
-      steering_centered = (
-        not driver_pulling
-        and abs(CS.out.steeringAngleDeg) <= 10.0
-        and abs(actuators.steeringAngleDeg) <= 10.0
-        and abs(
-          actuators.steeringAngleDeg
-          - CS.out.steeringAngleDeg
-        ) <= 5.0
-      )
-
-      if steering_centered:
-        self.low_speed_turn_reacquire_timer += 1
-      else:
-        self.low_speed_turn_reacquire_timer = 0
-
-      # A lingering indicator is intent, not continuing driver override.
-      # Reacquire only after 0.5 s of quiet, aligned, centered steering;
-      # never reacquire mid-corner merely because the hands-on timer elapsed.
-      # Require 0.5 second of continuously aligned, centered steering.
-      if self.low_speed_turn_reacquire_timer >= 50:
+      # Resume within the turn after quiet effort; a curved wheel is valid.
+      quiet = (not driver_pulling and CS.out.canValid
+               and np.isfinite(CS.out.steeringAngleDeg)
+               and np.isfinite(actuators.steeringAngleDeg))
+      self.low_speed_turn_reacquire_timer = self.low_speed_turn_reacquire_timer + 1 if quiet else 0
+      if self.low_speed_turn_reacquire_timer >= 20:
         self.low_speed_turn_takeover_latched = False
         self.low_speed_turn_reacquire_timer = 0
+        self.apply_angle_last = CS.out.steeringAngleDeg
 
     if self.low_speed_turn_takeover_latched:
       # Cancel the boosted exit profile after a driver takeover. If lateral

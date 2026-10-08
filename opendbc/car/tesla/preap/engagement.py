@@ -10,13 +10,9 @@ ButtonType = structs.CarState.ButtonEvent.Type
 # Echo filter windows: suppress auto-cancel echoes from spoofed stalk messages
 CANCEL_ECHO_WINDOW_MS = 600
 SPOOF_ECHO_WINDOW_MS = 300
-# Brake + throttle resume:
-# A fresh throttle press must START at or below this speed.
-# Resume only on release; accept a deliberate brief hold as well as a tap.
-# Once a valid press has started, crossing this speed does not erase it.
+# Brake + throttle resume: acknowledge a fresh press below this speed.
+# Driver gas remains passthrough until release; acknowledgment is not actuation.
 RESUME_MAX_SPEED_MS = 10.0 / 2.236936
-RESUME_TAP_MIN_MS = 50
-RESUME_TAP_MAX_MS = 2500
 
 
 class PreAPEngagement:
@@ -61,7 +57,6 @@ class PreAPEngagement:
                            gas_pressed, pedal_available, pedal_long_allowed,
                            can_engage, enabled):
       gas_rising = gas_pressed and not self.resume_prev_gas_pressed
-      gas_falling = not gas_pressed and self.resume_prev_gas_pressed
       self.resume_prev_gas_pressed = gas_pressed
 
       if not (enabled and can_engage and self.cruiseEnabled and pedal_long_allowed):
@@ -78,33 +73,17 @@ class PreAPEngagement:
         self.resume_press_ms = 0
         return False
 
-      if gas_rising and not self.enableLongControl:
-        # The tap must begin at or below the resume-speed ceiling. Once a
-        # valid press begins, crossing the ceiling does not invalidate it.
-        if v_ego <= RESUME_MAX_SPEED_MS:
-          self.resume_ready_for_press = True
-          self.resume_press_ms = curr_time_ms
-        return False
-
-      if self.resume_ready_for_press and gas_pressed:
-        if curr_time_ms - self.resume_press_ms > RESUME_TAP_MAX_MS:
-          self.resume_ready_for_press = False
-          self.resume_press_ms = 0
-        return False
-
-      if self.resume_ready_for_press and gas_falling:
-        duration = curr_time_ms - self.resume_press_ms
+      if gas_rising and not self.enableLongControl and v_ego <= RESUME_MAX_SPEED_MS:
+        self.enableLongControl = True
+        self.enableJustCC = False
+        if self.resume_target_kph > 0:
+          self.pedal_speed_kph = self.resume_target_kph
+        self.longCtrlEvent = "pccEnabled"
+        self.brake_paused_long = False
+        self.resume_sequence += 1
         self.resume_ready_for_press = False
         self.resume_press_ms = 0
-        if RESUME_TAP_MIN_MS <= duration <= RESUME_TAP_MAX_MS and not self.enableLongControl:
-          self.enableLongControl = True
-          self.enableJustCC = False
-          if self.resume_target_kph > 0:
-            self.pedal_speed_kph = self.resume_target_kph
-          self.longCtrlEvent = "pccEnabled"
-          self.brake_paused_long = False
-          self.resume_sequence += 1
-          return True
+        return True
 
       return False
 
