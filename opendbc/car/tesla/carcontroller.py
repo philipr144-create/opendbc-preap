@@ -131,9 +131,8 @@ class CarController(CarControllerBase):
       and blinker_on
     )
 
-    sub15_turn_context = (
-      speed_mph < 15.0
-      and low_speed_turn_profile
+    city_turn_context = (
+      low_speed_turn_profile
     )
 
     # --- HUMAN STEERING OVERRIDE V6 ---
@@ -161,14 +160,15 @@ class CarController(CarControllerBase):
     if driver_pulling:
       self.hso_timer = 20 if blinker_on and speed_mph < 25.0 else 50
 
-    # A takeover that begins during a sub-15-mph turn remains latched.
+    # A takeover that begins during a sub-25-mph turn remains latched.
     # This prevents the 0.5-second HSO timer from expiring while the model
     # is still requesting the previous curved path.
     if not CC.latActive:
       self.low_speed_turn_takeover_latched = False
       self.low_speed_turn_reacquire_timer = 0
+      self.hso_recovery_progress = 0.30
 
-    elif driver_pulling and sub15_turn_context:
+    elif driver_pulling and city_turn_context:
       self.low_speed_turn_takeover_latched = True
       self.low_speed_turn_reacquire_timer = 0
 
@@ -182,6 +182,8 @@ class CarController(CarControllerBase):
         self.low_speed_turn_takeover_latched = False
         self.low_speed_turn_reacquire_timer = 0
         self.apply_angle_last = CS.out.steeringAngleDeg
+        self.hso_recovery_angle = CS.out.steeringAngleDeg
+        self.hso_recovery_progress = 0.0
 
     if self.low_speed_turn_takeover_latched:
       # Cancel the boosted exit profile after a driver takeover. If lateral
@@ -205,6 +207,13 @@ class CarController(CarControllerBase):
 
     if self.frame % 2 == 0:
       target_angle = CS.out.steeringAngleDeg if overriding else actuators.steeringAngleDeg
+      progress = getattr(self, 'hso_recovery_progress', .30)
+      if lat_active and speed_mph < 25.0 and progress < .30:
+        # Blend back from the measured handback angle; existing rate, jerk
+        # and acceleration limits still constrain the transmitted target.
+        fraction = progress / .30
+        target_angle = self.hso_recovery_angle + fraction * (target_angle - self.hso_recovery_angle)
+        self.hso_recovery_progress = min(.30, progress + .02)
       if overriding:
         self.apply_angle_last = CS.out.steeringAngleDeg
 

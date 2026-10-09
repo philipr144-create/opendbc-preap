@@ -45,3 +45,29 @@ class TestPreAPCarStateUpdate(unittest.TestCase):
 
 if __name__ == "__main__":
   unittest.main()
+
+
+def test_city_allowance_uses_blinkers_in_complete_state_update():
+ from unittest.mock import patch
+ from opendbc.car import Bus
+ from opendbc.car.tesla.preap.carstate import update_preap
+ ci=TestPreAPCarStateUpdate()._make_interface()
+ ci.update([])
+ chassis=ci.can_parsers[Bus.chassis]
+ chassis.vl['GTW_carState']['BC_indicatorRStatus']=1
+ chassis.vl['GTW_carState']['BC_indicatorLStatus']=0
+ chassis.vl['EPAS_sysStatus']['EPAS_handsOnLevel']=0
+ chassis.vl['EPAS_sysStatus']['EPAS_torsionBarTorque']=1.75
+ with patch.object(ci.CS,'update_speed_kf',return_value=(6.,0.)):
+  for _ in range(5):state=update_preap(ci.CS,ci.can_parsers)
+  assert state.rightBlinker and not state.leftBlinker
+  assert not state.steeringPressed
+  chassis.vl['EPAS_sysStatus']['EPAS_torsionBarTorque']=3.1
+  for _ in range(5):state=update_preap(ci.CS,ci.can_parsers)
+  assert state.steeringPressed
+  chassis.vl['EPAS_sysStatus']['EPAS_torsionBarTorque']=.1
+  for _ in range(5):update_preap(ci.CS,ci.can_parsers)
+  chassis.vl['GTW_carState']['BC_indicatorRStatus']=0
+  chassis.vl['EPAS_sysStatus']['EPAS_torsionBarTorque']=2.
+  for _ in range(5):state=update_preap(ci.CS,ci.can_parsers)
+  assert not state.rightBlinker and state.steeringPressed

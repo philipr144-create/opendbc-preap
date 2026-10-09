@@ -62,6 +62,10 @@ def update_preap(cs, can_parsers):
   ENABLE_HSO = True 
   # ----------------------------------------
 
+  # Blinkers
+  ret.leftBlinker = cp_chassis.vl["GTW_carState"]["BC_indicatorLStatus"] == 1
+  ret.rightBlinker = cp_chassis.vl["GTW_carState"]["BC_indicatorRStatus"] == 1
+
   # Steering wheel
   epas_status = cp_chassis.vl["EPAS_sysStatus"]
   cs.hands_on_level = epas_status["EPAS_handsOnLevel"]
@@ -161,9 +165,6 @@ def update_preap(cs, can_parsers):
   # Doors
   ret.doorOpen = any((cs.can_defines["GTW_carState"][door].get(int(cp_chassis.vl["GTW_carState"][door]), "OPEN") == "OPEN") for door in _DOORS)
 
-  # Blinkers
-  ret.leftBlinker = cp_chassis.vl["GTW_carState"]["BC_indicatorLStatus"] == 1
-  ret.rightBlinker = cp_chassis.vl["GTW_carState"]["BC_indicatorRStatus"] == 1
 
   # Seatbelt — SDM1 (0x201) collides with Comma Pedal, hardcode for now
   ret.seatbeltUnlatched = False
