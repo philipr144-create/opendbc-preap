@@ -62,7 +62,11 @@ def test_city_allowance_uses_blinkers_in_complete_state_update():
   for _ in range(5):state=update_preap(ci.CS,ci.can_parsers)
   assert state.rightBlinker and not state.leftBlinker
   assert not state.steeringPressed
-  chassis.vl['EPAS_sysStatus']['EPAS_torsionBarTorque']=3.1
+  # Recorded turn effort must not cancel the actual initialized state.
+  chassis.vl['EPAS_sysStatus']['EPAS_torsionBarTorque']=4.1
+  for _ in range(5):state=update_preap(ci.CS,ci.can_parsers)
+  assert not state.steeringPressed
+  chassis.vl['EPAS_sysStatus']['EPAS_torsionBarTorque']=5.1
   for _ in range(5):state=update_preap(ci.CS,ci.can_parsers)
   assert state.steeringPressed
   chassis.vl['EPAS_sysStatus']['EPAS_torsionBarTorque']=.1
@@ -70,4 +74,34 @@ def test_city_allowance_uses_blinkers_in_complete_state_update():
   chassis.vl['GTW_carState']['BC_indicatorRStatus']=0
   chassis.vl['EPAS_sysStatus']['EPAS_torsionBarTorque']=2.
   for _ in range(5):state=update_preap(ci.CS,ci.can_parsers)
-  assert not state.rightBlinker and state.steeringPressed
+  assert not state.rightBlinker and not state.steeringPressed
+  chassis.vl['EPAS_sysStatus']['EPAS_torsionBarTorque']=5.1
+  for _ in range(5):state=update_preap(ci.CS,ci.can_parsers)
+  assert state.steeringPressed
+
+
+def test_full_state_update_restored_filter_and_low_speed_allowance():
+ from unittest.mock import patch
+ from opendbc.car import Bus
+ from opendbc.car.tesla.preap.carstate import update_preap
+ from opendbc.car.tesla.preap.steering_override import takeover_torque_threshold
+ ci=TestPreAPCarStateUpdate()._make_interface();ci.update([])
+ chassis=ci.can_parsers[Bus.chassis];epas=chassis.vl['EPAS_sysStatus']
+ for mph, effort in [(13.3,4.1),(27.5,1.09),(27.5,1.36),(27.,1.26),(65.,1.36)]:
+  for signal in [0,1]:
+   for sign in [-1,1]:
+    chassis.vl['GTW_carState']['BC_indicatorLStatus']=signal
+    chassis.vl['GTW_carState']['BC_indicatorRStatus']=0
+    ci.CS.steering_pressed_cnt=0;epas['EPAS_handsOnLevel']=2
+    with patch.object(ci.CS,'update_speed_kf',return_value=(mph/2.236936,0.)):
+     epas['EPAS_torsionBarTorque']=sign*effort
+     for _ in range(10):state=update_preap(ci.CS,ci.can_parsers)
+     assert not state.steeringPressed, (mph,signal,effort)
+     ci.CS.steering_pressed_cnt=0
+     threshold=takeover_torque_threshold(mph/2.236936,city_turn=bool(signal))
+     epas['EPAS_torsionBarTorque']=sign*(threshold+.1)
+     for _ in range(51):state=update_preap(ci.CS,ci.can_parsers)
+     assert state.steeringPressed, (mph,signal)
+     epas['EPAS_torsionBarTorque']=0.
+     for _ in range(105):state=update_preap(ci.CS,ci.can_parsers)
+     assert not state.steeringPressed

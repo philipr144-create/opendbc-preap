@@ -145,12 +145,12 @@ class CarController(CarControllerBase):
       0,
     )
 
-    # Level-1 contact needs torque evidence; stronger effort yields immediately.
-    # At highway speed, level-1 contact uses carState's sustained torque
-    # filter rather than bypassing it through this controller-side check.
+    # Below 15 mph use the requested 5 Nm allowance. Above it, restore
+    # legacy HSO: direct 3 Nm with a signal, filtered torque otherwise,
+    # and EPAS level 3 as the immediate takeover path in every band.
     hands_on_trigger = (hands_on_override(hands_on_level, CS.out.steeringTorque,
                                          takeover_torque_threshold(CS.out.vEgo, city_turn=blinker_on))
-                        if speed_mph < 25.0 else hands_on_level >= 2)
+                        if speed_mph < 15.0 or blinker_on else hands_on_level >= 3)
 
     driver_pulling = (
       CS.out.steeringPressed
@@ -158,7 +158,7 @@ class CarController(CarControllerBase):
     )
 
     if driver_pulling:
-      self.hso_timer = 20 if blinker_on and speed_mph < 25.0 else 50
+      self.hso_timer = 20 if blinker_on and speed_mph < 15.0 else 50
 
     # A takeover that begins during a sub-25-mph turn remains latched.
     # This prevents the 0.5-second HSO timer from expiring while the model

@@ -74,43 +74,14 @@ def update_preap(cs, can_parsers):
   ret.steeringTorque = -epas_status["EPAS_torsionBarTorque"]
   
   if ENABLE_HSO:
-    # V3 FIX: Use raw torque for INSTANT reaction (to beat Panda safety limits),
-    # but require the car to be moving (> 0.3 m/s or ~0.7 mph) to prevent standstill friction loops.
-    # Low-speed Pre-AP HSO threshold.
-    #
-    # Tight low-speed turns create considerably more torsion-bar load from
-    # tire scrub / rack effort.  The stock STEER_THRESHOLD=1 can therefore
-    # look like driver override even while openpilot itself is making the turn.
-    #
-    # Keep the extra allowance confined to low speed:
-    #
-    #   <= 5 mph : 2.50
-    #      10 mph : 2.00
-    #      15 mph : 1.50
-    #   >= 20 mph : stock STEER_THRESHOLD (1.00)
-    #
-    # EPAS hands-on-level detection and Panda/EPAS safety remain unchanged.
     speed_mph = ret.vEgo * 2.236936
-
-    if speed_mph <= 5.0:
-      hso_torque_threshold = 2.50
-    elif speed_mph < 10.0:
-      hso_torque_threshold = 2.50 - ((speed_mph - 5.0) / 5.0) * 0.50
-    elif speed_mph < 15.0:
-      hso_torque_threshold = 2.00 - ((speed_mph - 10.0) / 5.0) * 0.50
-    elif speed_mph < 20.0:
-      hso_torque_threshold = 1.50 - ((speed_mph - 15.0) / 5.0) * (1.50 - STEER_THRESHOLD)
-    else:
-      hso_torque_threshold = STEER_THRESHOLD
-
-    if bool(ret.leftBlinker) != bool(ret.rightBlinker):
-      hso_torque_threshold = takeover_torque_threshold(ret.vEgo, city_turn=True)
-
-    is_overriding = (abs(ret.steeringTorque) > hso_torque_threshold or hands_on_override(cs.hands_on_level, ret.steeringTorque, hso_torque_threshold)) and ret.vEgo > 0.3
-    override_filter = 2 if speed_mph < 25.0 else 5
-    # Do not retain a half-second counter tail after effort is released.
-    # The controller owns the 0.20 s quiet handback dwell. Fast entry stays below 25 mph; highway torque requires sustained evidence.
-    if not is_overriding:
+    blinker_on = bool(ret.leftBlinker or ret.rightBlinker)
+    hso_torque_threshold = takeover_torque_threshold(ret.vEgo, city_turn=blinker_on)
+    is_overriding = hands_on_override(cs.hands_on_level, ret.steeringTorque, hso_torque_threshold) and ret.vEgo > 0.3
+    # Restore the legacy 50-count accumulation above the low-speed band.
+    # The controller separately honors level 3 and direct signaled override.
+    override_filter = 2 if speed_mph < 15.0 else 50
+    if speed_mph < 15.0 and not is_overriding:
       cs.steering_pressed_cnt = min(cs.steering_pressed_cnt, override_filter)
     ret.steeringPressed = cs.update_steering_pressed(is_overriding, override_filter)
   else:
