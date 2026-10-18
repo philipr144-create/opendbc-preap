@@ -9,7 +9,7 @@ def takeover_torque_threshold(speed_mps, city_turn=False):
     return STEER_THRESHOLD
   if 0.0 <= speed_mph < 15.0:
     return 5.0
-  return 3.0 if city_turn else STEER_THRESHOLD
+  return 3.0
 
 
 def hands_on_override(level, torque, threshold=STEER_THRESHOLD):

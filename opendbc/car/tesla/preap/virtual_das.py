@@ -13,7 +13,6 @@ from numpy import clip, interp
 
 from opendbc.car.common.filter_simple import FirstOrderFilter, HighPassFilter
 from opendbc.car.common.pid import PIDController
-from opendbc.car.tesla.preap.accel_policy import limit_positive_accel, limit_regen_release
 from opendbc.car.tesla.preap.constants import (
   VDAS_INNER_K_BP, VDAS_INNER_KP_V, VDAS_INNER_KI_V,
   VDAS_FUTURE_T_BP, VDAS_FUTURE_T_V,
@@ -54,10 +53,9 @@ MAX_PITCH_COMPENSATION = 1.5  # m/s² — clamp transient compensation
 class GradeEstimator:
   """Estimates road grade from IMU pitch and compensates the controller.
 
-  Uses a low-pass filter on pitch for the steady-state grade component
-  (subtracted from a_ego so the inner PID doesn't fight gravity) and
-  a high-pass filter for transient grade changes (added to feedforward
-  so the controller anticipates crests and dips).
+  Uses filtered pitch for bounded motor-load feedforward. Net vehicle
+  acceleration feedback is never gravity-adjusted. The high-pass estimate
+  is retained for compatibility/diagnostics; it is not added to pedal DI.
 
   Follows the same pattern as Toyota's carcontroller.py lines 68-69, 204-235.
   """
@@ -75,11 +73,12 @@ class GradeEstimator:
 
     Returns:
       (grade_accel, pitch_compensation):
-        grade_accel: steady-state gravitational component along road (m/s²).
-                     Positive = downhill (gravity accelerates the car).
+        grade_accel: steady-state road-load acceleration (m/s²).
+                     Positive = uphill (additional motor effort is required).
         pitch_compensation: transient feedforward bump for grade changes (m/s²).
     """
-    if len(orientation_ned) < 2:
+    if len(orientation_ned) < 2 or not math.isfinite(orientation_ned[1]):
+      self.reset()
       return 0.0, 0.0
 
     pitch = orientation_ned[1]
@@ -178,7 +177,7 @@ class FeedforwardModel:
       from opendbc.car.carlog import carlog
       carlog.warning("vdas: failed to load FF table from %s, using defaults", path)
 
-  def get(self, a_cmd: float, v_ego: float, zero_torque_di: float) -> float:
+  def get(self, a_cmd: float, v_ego: float, zero_torque_di: float, net_accel=None) -> float:
     """Look up pedal_di for a given (speed, accel) pair.
 
     The table is stored with zero_torque_di=0. At runtime the learned
@@ -215,7 +214,7 @@ class FeedforwardModel:
 
     road_load_blend = float(clip(
       (
-        a_cmd - ROAD_LOAD_FADE_DECEL
+        (a_cmd if net_accel is None else net_accel) - ROAD_LOAD_FADE_DECEL
       ) / (
         0.0 - ROAD_LOAD_FADE_DECEL
       ),
@@ -231,14 +230,18 @@ class FeedforwardModel:
 class VirtualDAS:
   """Cascaded longitudinal controller for Pre-AP Tesla pedal control.
 
-  Jerk limiter smooths the input, feedforward maps accel→DI, inner PID
-  corrects residual error using predicted future acceleration.
+  LongControl owns net-acceleration feedback. Physical jerk limits protect
+  the motor command, and feedforward converts motor acceleration to DI.
+  Pitch feedforward is disabled; LongControl handles hill tracking error.
+  The legacy inner PID remains disabled by the installed zero gains.
   """
 
   def __init__(self, dt: float = 0.02):
     self.dt = dt
     self.jerk_limiter = JerkLimiter(j_pos_max=2.5, j_neg_max=2.5, dt=dt)
     self.ff_model = FeedforwardModel()
+    self.motor_jerk_limiter = JerkLimiter(dt=dt)
+    self.grade_load = self.motor_accel = self.accel_request = 0.
     self.grade_estimator = GradeEstimator(dt=dt)
     self.prev_pedal_di = 0.0
 
@@ -269,21 +272,24 @@ class VirtualDAS:
     Returns:
       pedal_di: output in DI units (caller converts to voltage via di_to_pedal)
     """
-    if personality is not None:
-      a_cmd = limit_positive_accel(a_cmd, self.jerk_limiter.a_limited, v_ego, personality, self.dt)
-      # Keep existing low-speed stop/launch release; ease rolling curve exits.
-      if v_ego >= 5.0:
-        a_cmd = limit_regen_release(a_cmd, self.jerk_limiter.a_limited, personality, self.dt)
+    # The planner owns personality and ordinary comfort transitions. This
+    # stage accepts bounded feedback compensation and retains physical slew.
     a_limited = self.jerk_limiter.update(a_cmd)
+    self.accel_slew_limited = abs(a_limited - a_cmd) > 1e-6
 
-    grade_accel, pitch_compensation = self.grade_estimator.update(
-      orientation_ned if orientation_ned is not None else [])
+    # Pitch-based motor feedforward is disabled after route 363 showed
+    # demand-dependent hill support amplifying mild braking corrections.
+    # Keep net-acceleration feedback upstream; orientation must not alter
+    # the pedal request until a replacement grade model is validated.
+    grade_load = 0.
+    motor_request = float(clip(a_limited, -2.5, ACCEL_MAX))
+    self.motor_accel = self.motor_jerk_limiter.update(motor_request)
+    self.motor_slew_limited = abs(self.motor_accel - motor_request) > 1e-6
+    ff_di = self._feedforward(self.motor_accel, v_ego, net_accel=a_limited)
+    self.grade_load = grade_load
+    self.accel_request = a_cmd
 
-    ff_di = self._feedforward(a_limited, v_ego)
-    ff_di += pitch_compensation
-
-    # Subtract grade from a_ego so the PID doesn't fight gravity
-    a_ego_corrected = a_ego - grade_accel
+    a_ego_corrected = a_ego
 
     a_ego_filtered = self.a_ego_filter.update(a_ego_corrected)
     j_ego = (a_ego_filtered - self.prev_a_ego_filtered) / self.dt
@@ -303,9 +309,10 @@ class VirtualDAS:
 
     pedal_profile = nap_conf.get_pedal_profile_values()
     max_pedal_value = float(interp(v_ego, PEDAL_BP, pedal_profile))
-    pedal_di = float(clip(pedal_di, PEDAL_DI_MIN, max_pedal_value))
-
-    pedal_di = self._rate_limit(pedal_di, prev_pedal_di)
+    limited_di = float(clip(pedal_di, PEDAL_DI_MIN, max_pedal_value))
+    self.pedal_limited = abs(limited_di - pedal_di) > 1e-6
+    pedal_di = self._rate_limit(limited_di, prev_pedal_di)
+    self.pedal_slew_limited = abs(pedal_di - limited_di) > 1e-6
 
     self.prev_pedal_di = pedal_di
     return pedal_di
@@ -313,19 +320,22 @@ class VirtualDAS:
   def reset(self, a_init: float = 0.0, pedal_di_init: float = 0.0):
     """Reset all internal state on engage transition."""
     self.jerk_limiter.reset(a_init)
+    self.motor_jerk_limiter.reset(a_init)
+    self.grade_load = 0.
+    self.motor_accel = self.accel_request = a_init
     self.inner_pid.reset()
     self.grade_estimator.reset()
     self.a_ego_filter.x = 0.0
     self.prev_a_ego_filtered = 0.0
     self.prev_pedal_di = pedal_di_init
 
-  def _feedforward(self, a_cmd: float, v_ego: float) -> float:
+  def _feedforward(self, a_cmd: float, v_ego: float, net_accel=None) -> float:
     """Map acceleration to pedal DI via 2D lookup table."""
     zero_torque_di = get_zero_torque().get(v_ego)
     pedal_profile = nap_conf.get_pedal_profile_values()
     max_pedal_value = float(interp(v_ego, PEDAL_BP, pedal_profile))
 
-    pedal_di = self.ff_model.get(a_cmd, v_ego, zero_torque_di)
+    pedal_di = self.ff_model.get(a_cmd, v_ego, zero_torque_di, net_accel=net_accel)
 
     return float(clip(pedal_di, PEDAL_DI_MIN, max_pedal_value))
 

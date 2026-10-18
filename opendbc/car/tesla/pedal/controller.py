@@ -1,3 +1,4 @@
+import math
 from numpy import interp, clip
 
 from opendbc.car.tesla.preap.nap_conf import (
@@ -35,10 +36,20 @@ class PedalZeroTorque:
   def __init__(self):
     self.value = PEDAL_DI_ZERO  # start at coast, refine from real data
     self._best_torque = TORQUE_LEVEL_DECEL
+    self._settled = 0.0
+    self._previous_di = None
 
-  def update(self, torque_level: float, current_pedal_di: float, v_ego: float):
+  def update(self, torque_level: float, current_pedal_di: float, v_ego: float, *, valid=True, dt=.02):
     """Call every pedal frame with the current motor torque and pedal position."""
-    if v_ego < ZERO_TORQUE_MIN_SPEED:
+    if (not valid or not all(math.isfinite(v) for v in (torque_level, current_pedal_di, v_ego, dt))
+        or not 0 < dt <= .1 or v_ego < ZERO_TORQUE_MIN_SPEED):
+      self._settled = 0.
+      self._previous_di = None
+      return
+    stable = self._previous_di is not None and abs(current_pedal_di - self._previous_di) <= .10
+    self._previous_di = current_pedal_di
+    self._settled = self._settled + dt if stable else 0.
+    if self._settled < .30:
       return
 
     # If torque is between decel and accel thresholds and closer to zero

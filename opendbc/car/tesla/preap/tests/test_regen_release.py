@@ -17,10 +17,9 @@ def test_full_curve_cycle_at_final_accel_path(personality):
       value=vdas.jerk_limiter.a_limited
       if request<previous:
         assert value==pytest.approx(max(request,previous-.05))
-      elif previous<0.:
-        assert 0. <= value-previous <= REGEN_RELEASE_JERK[personality]*.02+1e-9
       else:
-        assert 0. <= value-previous <= ACCEL_RISE[personality]*.02+1e-9
+        # Ordinary personality recovery is owned upstream by the planner.
+        assert 0. <= value-previous <= 2.5*.02+1e-9
     assert value==pytest.approx(-2.5)
 
 

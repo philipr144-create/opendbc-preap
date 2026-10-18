@@ -76,7 +76,11 @@ class PreAPLongController:
 
       # Update zero-torque learning
       if use_pedal:
-        get_zero_torque().update(CS.pedal.torque_level, self.prev_pedal_di, CS.out.vEgo)
+        get_zero_torque().update(
+          CS.pedal.torque_level, self.prev_pedal_di, CS.out.vEgo,
+          valid=(self.prev_preap_long_active and long_active and pedal_responding
+                 and getattr(CS.out, "canValid", False) and not CS.out.gasPressed
+                 and not getattr(CS.out, "brakePressed", False)))
 
       if pedal_engaged:
         try:
@@ -96,7 +100,14 @@ class PreAPLongController:
             self.prev_pedal_di = self.vdas.update(
               accel_request, CS.out.vEgo, self.prev_pedal_di,
               a_ego=CS.out.aEgo, freeze_integrator=False,
-              orientation_ned=list(CC.orientationNED), personality=get_preap_personality())
+              orientation_ned=list(CC.orientationNED))
+            if frame % 100 == 0:
+              carlog.info("NAP actuator speed=%.3f personality=%d request=%.3f limited=%.3f motor=%.3f grade=%.3f pedal_di=%.3f zero_di=%.3f accel_slew=%d motor_slew=%d pedal_limit=%d pedal_slew=%d",
+                          CS.out.vEgo, get_preap_personality(), accel_request,
+                          self.vdas.jerk_limiter.a_limited, self.vdas.motor_accel,
+                          self.vdas.grade_load, self.prev_pedal_di, get_zero_torque().get(CS.out.vEgo),
+                          self.vdas.accel_slew_limited, self.vdas.motor_slew_limited,
+                          self.vdas.pedal_limited, self.vdas.pedal_slew_limited)
             pedal_cmd = nap_conf.di_to_pedal(self.prev_pedal_di)
             can_sends.append(tesla_can.create_pedal_command(pedal_cmd, enable=1))
 

@@ -221,7 +221,8 @@ def update_preap(cs, can_parsers):
 
   # NAP Dashboard: Instant Speed Offset & Trim Override
   try:
-    _sett = __import__('json').load(open('/data/nap_settings.json'))
+    with open('/data/nap_settings.json') as stream:
+      _sett = __import__('json').load(stream)
     _off = 5.0 if _sett.get('speed_offset', False) else 0.0
     _trim = float(_sett.get('speed_trim', 0.0))
     ret.cruiseState.speed += ((_off + _trim) * CV.MPH_TO_MS)
