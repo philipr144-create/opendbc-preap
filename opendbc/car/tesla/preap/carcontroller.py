@@ -6,6 +6,7 @@ from opendbc.car.tesla.preap.nap_conf import nap_conf, PEDAL_DI_MIN, PEDAL_DI_ZE
 from opendbc.car.tesla.preap.interface import get_preap_personality
 from opendbc.car.tesla.pedal.controller import get_zero_torque
 from opendbc.car.tesla.preap.virtual_das import VirtualDAS
+from opendbc.car.tesla.preap.pitch_grade_assist import OpenRoadPitchPermission
 from opendbc.car.tesla.preap.teslacan import TeslaCANPreAP
 from opendbc.car.tesla.values import CANBUS, CruiseButtons
 from opendbc.car.carlog import carlog
@@ -31,6 +32,7 @@ class PreAPLongController:
     self.prev_requested_long = False
     self.prev_preap_long_active = False
     self.vdas = VirtualDAS(dt=0.02)
+    self.pitch_plan_gate = OpenRoadPitchPermission()
 
   def update(self, CC, CS, frame, tesla_can, can_bus_party):
     can_sends = []
@@ -100,7 +102,9 @@ class PreAPLongController:
             self.prev_pedal_di = self.vdas.update(
               accel_request, CS.out.vEgo, self.prev_pedal_di,
               a_ego=CS.out.aEgo, freeze_integrator=False,
-              orientation_ned=list(CC.orientationNED))
+              orientation_ned=list(CC.orientationNED),
+              allow_pitch=(self.vdas.pitch_assist.mode != "off"
+                           and self.pitch_plan_gate.allowed(CC, CS)))
             if frame % 100 == 0:
               carlog.info("NAP actuator speed=%.3f personality=%d request=%.3f limited=%.3f motor=%.3f grade=%.3f pedal_di=%.3f zero_di=%.3f accel_slew=%d motor_slew=%d pedal_limit=%d pedal_slew=%d",
                           CS.out.vEgo, get_preap_personality(), accel_request,

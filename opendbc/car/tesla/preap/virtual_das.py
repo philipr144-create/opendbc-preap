@@ -35,6 +35,8 @@ from opendbc.car.tesla.pedal.controller import (
 )
 
 
+from opendbc.car.tesla.preap.pitch_grade_assist import PitchGradeAssist
+
 FF_TABLE_PATH = "/data/vdas_ff_table.json"
 
 # Inner PID error deadband: errors below this threshold are zeroed before
@@ -242,7 +244,7 @@ class VirtualDAS:
     self.ff_model = FeedforwardModel()
     self.motor_jerk_limiter = JerkLimiter(dt=dt)
     self.grade_load = self.motor_accel = self.accel_request = 0.
-    self.grade_estimator = GradeEstimator(dt=dt)
+    self.pitch_assist = PitchGradeAssist(dt=dt)
     self.prev_pedal_di = 0.0
 
     self.inner_pid = PIDController(
@@ -258,7 +260,7 @@ class VirtualDAS:
 
   def update(self, a_cmd: float, v_ego: float, prev_pedal_di: float,
              a_ego: float = 0.0, freeze_integrator: bool = False,
-             orientation_ned: list | None = None, personality=None) -> float:
+             orientation_ned: list | None = None, personality=None, allow_pitch=False) -> float:
     """Compute pedal DI from acceleration command.
 
     Args:
@@ -277,12 +279,13 @@ class VirtualDAS:
     a_limited = self.jerk_limiter.update(a_cmd)
     self.accel_slew_limited = abs(a_limited - a_cmd) > 1e-6
 
-    # Pitch-based motor feedforward is disabled after route 363 showed
-    # demand-dependent hill support amplifying mild braking corrections.
-    # Keep net-acceleration feedback upstream; orientation must not alter
-    # the pedal request until a replacement grade model is validated.
-    grade_load = 0.
-    motor_request = float(clip(a_limited, -2.5, ACCEL_MAX))
+    # NAP_UNIFIED_PITCH_V4: one bounded motor-domain correction; no raw DI.
+    # Grade assistance is evaluated in m/s^2 before physical motor jerk limit.
+    # Fresh planner gate must authorize, or feedforward stays unchanged.
+    grade_load = self.pitch_assist.update(
+      orientation_ned if orientation_ned is not None else [],
+      v_ego, a_limited, allowed=allow_pitch)
+    motor_request = float(clip(a_limited + grade_load, -2.5, ACCEL_MAX))
     self.motor_accel = self.motor_jerk_limiter.update(motor_request)
     self.motor_slew_limited = abs(self.motor_accel - motor_request) > 1e-6
     ff_di = self._feedforward(self.motor_accel, v_ego, net_accel=a_limited)
@@ -324,7 +327,7 @@ class VirtualDAS:
     self.grade_load = 0.
     self.motor_accel = self.accel_request = a_init
     self.inner_pid.reset()
-    self.grade_estimator.reset()
+    self.pitch_assist.reset()
     self.a_ego_filter.x = 0.0
     self.prev_a_ego_filtered = 0.0
     self.prev_pedal_di = pedal_di_init
