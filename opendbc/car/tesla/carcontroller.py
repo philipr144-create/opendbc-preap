@@ -2,8 +2,8 @@ from dataclasses import replace
 import types
 import numpy as np
 from opendbc.can import CANPacker
-from opendbc.car import Bus
-from opendbc.car.lateral import apply_steer_angle_limits_vm
+from opendbc.car import Bus, DT_CTRL
+from opendbc.car.lateral import apply_steer_angle_limits_vm, get_max_angle_vm
 from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.tesla.teslacan import TeslaCAN
 from opendbc.car.tesla.teslacan_legacy import TeslaCANRaven
@@ -15,6 +15,7 @@ from opendbc.car.tesla.preap.parked_signal_test import ParkedSignalTest
 from opendbc.car.tesla.preap.tap_lane_change import NavigationSignalController, TapController
 from opendbc.car.tesla.preap.nap_params import NAPParamKeys
 from opendbc.car.tesla.preap.steering_override import hands_on_override, takeover_torque_threshold
+from opendbc.car.tesla.preap.steering_handover import QuietHandover, SteeringRecovery, WheelMotion
 
 def get_safety_CP():
   from opendbc.car.tesla.interface import CarInterface
@@ -135,85 +136,67 @@ class CarController(CarControllerBase):
       low_speed_turn_profile
     )
 
-    # --- HUMAN STEERING OVERRIDE V6 ---
-    if not hasattr(self, "hso_timer"):
-      self.hso_timer = 0
-
-    hands_on_level = getattr(
-      CS,
-      "hands_on_level",
-      0,
-    )
-
-    # Below 15 mph use the requested 5 Nm allowance. Above it, restore
-    # legacy HSO: direct 3 Nm with a signal, filtered torque otherwise,
-    # and EPAS level 3 as the immediate takeover path in every band.
-    hands_on_trigger = (hands_on_override(hands_on_level, CS.out.steeringTorque,
-                                         takeover_torque_threshold(CS.out.vEgo, city_turn=blinker_on))
+    # Driver effort yields immediately. Only continuous quiet effort can
+    # release ownership; changing the signal or desired angle cannot release it.
+    if not hasattr(self, 'steering_handover'):
+      self.steering_handover = QuietHandover(DT_CTRL)
+      self.steering_wheel_motion = WheelMotion(DT_CTRL)
+      self.steering_recovery = SteeringRecovery(DT_CTRL * CarControllerParams.STEER_STEP)
+      self.steering_recovery_needed = False
+    hands_on_level = getattr(CS, 'hands_on_level', 0)
+    threshold = takeover_torque_threshold(CS.out.vEgo, city_turn=blinker_on)
+    hands_on_trigger = (hands_on_override(hands_on_level, CS.out.steeringTorque, threshold)
                         if speed_mph < 15.0 or blinker_on else hands_on_level >= 3)
-
-    driver_pulling = (
-      CS.out.steeringPressed
-      or hands_on_trigger
-    )
-
-    if driver_pulling:
-      self.hso_timer = 20 if blinker_on and speed_mph < 15.0 else 50
-
-    # A takeover that begins during a sub-25-mph turn remains latched.
-    # This prevents the 0.5-second HSO timer from expiring while the model
-    # is still requesting the previous curved path.
+    driver_pulling = CS.out.steeringPressed or hands_on_trigger
+    healthy = (CS.out.canValid and not getattr(CS.out, 'steerFaultTemporary', False)
+               and not getattr(CS.out, 'steerFaultPermanent', False)
+               and all(np.isfinite(v) for v in (CS.out.steeringAngleDeg,
+                       actuators.steeringAngleDeg, CS.out.steeringTorque,
+                       CS.out.vEgo, CS.out.vEgoRaw)))
+    self.steering_wheel_motion.update(CS.out.steeringAngleDeg if healthy else float('nan'))
+    normal_rate = CarControllerParams.ANGLE_LIMITS.MAX_ANGLE_RATE / self.steering_recovery.dt
+    reachable = True
+    if healthy and self.steering_handover.pending:
+      reachable_limit = min(CarControllerParams.ANGLE_LIMITS.STEER_ANGLE_MAX,
+                            get_max_angle_vm(max(CS.out.vEgoRaw, 1.), self.VM, CarControllerParams))
+      reachable = np.isfinite(reachable_limit) and abs(CS.out.steeringAngleDeg) <= reachable_limit
+    quiet = (reachable and not driver_pulling and hands_on_level < 2
+             and abs(CS.out.steeringTorque) <= min(2., .5*threshold)
+             and self.steering_wheel_motion.ready
+             and abs(self.steering_wheel_motion.rate) <= normal_rate)
+    overriding = self.steering_handover.update(CC.latActive, healthy, driver_pulling, quiet)
+    if overriding:
+      self.steering_recovery_needed = True
+      self.steering_recovery.reset()
     if not CC.latActive:
-      self.low_speed_turn_takeover_latched = False
-      self.low_speed_turn_reacquire_timer = 0
-      self.hso_recovery_progress = 0.30
-
-    elif driver_pulling and city_turn_context:
-      self.low_speed_turn_takeover_latched = True
-      self.low_speed_turn_reacquire_timer = 0
-
-    elif self.low_speed_turn_takeover_latched:
-      # Resume within the turn after quiet effort; a curved wheel is valid.
-      quiet = (not driver_pulling and CS.out.canValid
-               and np.isfinite(CS.out.steeringAngleDeg)
-               and np.isfinite(actuators.steeringAngleDeg))
-      self.low_speed_turn_reacquire_timer = self.low_speed_turn_reacquire_timer + 1 if quiet else 0
-      if self.low_speed_turn_reacquire_timer >= 20:
-        self.low_speed_turn_takeover_latched = False
-        self.low_speed_turn_reacquire_timer = 0
-        self.apply_angle_last = CS.out.steeringAngleDeg
-        self.hso_recovery_angle = CS.out.steeringAngleDeg
-        self.hso_recovery_progress = 0.0
-
-    if self.low_speed_turn_takeover_latched:
-      # Cancel the boosted exit profile after a driver takeover. If lateral
-      # control later reacquires, it will use the normal Tesla steering rate.
+      self.steering_recovery_needed = False
+      self.steering_recovery.reset()
+    lat_active = CC.latActive and healthy and not overriding
+    if overriding:
+      # Keep normal turning authority once control returns; only the
+      # initial angle mismatch is blended, not the ongoing path.
       self.low_speed_turn_exit_timer = 0
       low_speed_turn_profile = False
-
-    overriding = (
-      self.hso_timer > 0
-      or self.low_speed_turn_takeover_latched
-    )
-
-    if self.hso_timer > 0:
-      self.hso_timer -= 1
-
-    lat_active = (
-      CC.latActive
-      and not overriding
-    )
+    # Telemetry only: expose the final local command gate to card's optional
+    # status publisher. No subscriptions, I/O or control changes here.
+    self.nap_spoken_control_state = (bool(overriding), bool(lat_active))
     # ----------------------------------
 
     if self.frame % 2 == 0:
       target_angle = CS.out.steeringAngleDeg if overriding else actuators.steeringAngleDeg
-      progress = getattr(self, 'hso_recovery_progress', .30)
-      if lat_active and speed_mph < 25.0 and progress < .30:
-        # Blend back from the measured handback angle; existing rate, jerk
-        # and acceleration limits still constrain the transmitted target.
-        fraction = progress / .30
-        target_angle = self.hso_recovery_angle + fraction * (target_angle - self.hso_recovery_angle)
-        self.hso_recovery_progress = min(.30, progress + .02)
+      if lat_active and self.steering_recovery_needed:
+        self.steering_recovery.seed(CS.out.steeringAngleDeg, self.steering_wheel_motion.rate,
+                                   CarControllerParams.ANGLE_LIMITS.MAX_ANGLE_RATE / self.steering_recovery.dt)
+        self.steering_recovery_needed = False
+      recovering = lat_active and self.steering_recovery.active
+      if recovering:
+        # Shape a reachable target. Safety's speed-dependent angle ceiling
+        # remains authoritative; an unreachable raw target cannot trap recovery.
+        max_angle = min(CarControllerParams.ANGLE_LIMITS.STEER_ANGLE_MAX,
+                        get_max_angle_vm(max(CS.out.vEgoRaw, 1.), self.VM, CarControllerParams))
+        target_angle = self.steering_recovery.update(
+          float(np.clip(target_angle, -max_angle, max_angle)),
+          CarControllerParams.ANGLE_LIMITS.MAX_ANGLE_RATE / self.steering_recovery.dt)
       if overriding:
         self.apply_angle_last = CS.out.steeringAngleDeg
 
@@ -270,6 +253,8 @@ class CarController(CarControllerBase):
 
       self.apply_angle_last = apply_steer_angle_limits_vm(target_angle, self.apply_angle_last, CS.out.vEgoRaw, CS.out.steeringAngleDeg,
                                                           lat_active, params_to_use, self.VM)
+      if recovering:
+        self.steering_recovery.commit(self.apply_angle_last)
       cntr = (self.frame // 2) % 16
       can_sends.append(self.tesla_can.create_steering_control(cntr, self.apply_angle_last, lat_active))
       can_sends.append(self.tesla_can.create_epas_control(cntr, 1)) # EPAS must stay powered to avoid shudder

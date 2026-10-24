@@ -75,7 +75,7 @@ def update_preap(cs, can_parsers):
   
   if ENABLE_HSO:
     speed_mph = ret.vEgo * 2.236936
-    blinker_on = bool(ret.leftBlinker or ret.rightBlinker)
+    blinker_on = bool(ret.leftBlinker) != bool(ret.rightBlinker)
     hso_torque_threshold = takeover_torque_threshold(ret.vEgo, city_turn=blinker_on)
     is_overriding = hands_on_override(cs.hands_on_level, ret.steeringTorque, hso_torque_threshold) and ret.vEgo > 0.3
     # Restore the legacy 50-count accumulation above the low-speed band.
@@ -84,27 +84,27 @@ def update_preap(cs, can_parsers):
     if speed_mph < 15.0 and not is_overriding:
       cs.steering_pressed_cnt = min(cs.steering_pressed_cnt, override_filter)
     ret.steeringPressed = cs.update_steering_pressed(is_overriding, override_filter)
+    if blinker_on:
+      # Immediate signal-gated handover, including standstill; no count delay.
+      ret.steeringPressed = hands_on_override(cs.hands_on_level, ret.steeringTorque, hso_torque_threshold)
+      cs.steering_pressed_cnt = 0
   else:
     ret.steeringPressed = cs.update_steering_pressed(abs(ret.steeringTorque) > STEER_THRESHOLD, 5)
 
   eac_status = cs.can_defines["EPAS_sysStatus"]["EPAS_eacStatus"].get(int(epas_status["EPAS_eacStatus"]), None)
   ret.steerFaultPermanent = eac_status == "EAC_FAULT"
   
-  if ENABLE_HSO:
-    # Spoof temporary fault to instantly idle the rack and prevent internal EPAS hardware faults
-    ret.steerFaultTemporary = ret.steeringPressed
-  else:
-    ret.steerFaultTemporary = False
-
   eac_error_code = cs.can_defines["EPAS_sysStatus"]["EPAS_eacErrorCode"].get(int(epas_status["EPAS_eacErrorCode"]), None)
-  # Disengage on hands-on override OR EPAS actively rejecting steering commands.
+  # A real EPAS request rejection inhibits lateral through the normal fault path.
+  # Driver effort alone stays a temporary controller handover, not a rack fault.
   # Error codes 6/7/8/9 = EPAS request validators rejected angle/rate/safety.
   # All indicate the EPAS stopped steering — driver must be notified immediately.
   epas_rejecting = eac_status == "EAC_INHIBITED" and eac_error_code in (
     "EAC_ERROR_HIGH_ANGLE_REQ", "EAC_ERROR_HIGH_ANGLE_RATE_REQ",
     "EAC_ERROR_HIGH_ANGLE_SAFETY", "EAC_ERROR_HIGH_ANGLE_RATE_SAFETY",
   )
-  ret.steerFaultTemporary = False
+  ret.steerFaultTemporary = epas_rejecting
+  # Preserve longitudinal engagement; do not treat driver handover as cancel.
   ret.steeringDisengage = False
   cs.engagement.handle_steering_disengage(ret.steeringDisengage)
 

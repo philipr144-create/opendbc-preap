@@ -7,6 +7,8 @@ def takeover_torque_threshold(speed_mps, city_turn=False):
   speed_mph = speed_mps * 2.236936
   if not math.isfinite(speed_mph):
     return STEER_THRESHOLD
+  # Restore the prior effort calibration. A blinker alone must not lower
+  # the threshold into rack/road torque seen during low-speed recovery.
   if 0.0 <= speed_mph < 15.0:
     return 5.0
   return 3.0

@@ -11,6 +11,25 @@ def personality_index(personality):
   return int(getattr(personality, "raw", personality))
 
 
+def positive_accel_rise(speed, personality):
+  """Shared added-propulsion comfort rate for planner and final feedback."""
+  p = personality_index(personality)
+  if p == 2:
+    return float(np.interp(speed, [0.0, 11.176, 15.6464], [0.18, 0.18, 0.30]))
+  return .35 if p == 1 else ACCEL_RISE.get(p, .4)
+
+
+def limit_positive_output_rise(request, previous, speed, personality, dt):
+  """Limit added positive output only; reduced power/braking pass immediately.
+
+  Do not apply the net-acceleration profile ceiling to motor-load feedback.
+  Existing physical limits remain the caller's responsibility.
+  """
+  if request <= 0. or request <= previous:
+    return request
+  return min(request, max(0., previous) + positive_accel_rise(speed, personality) * dt)
+
+
 def accel_ceiling(speed, personality):
   profile = ACCEL_PREAP_PROFILES.get(personality_index(personality), ACCEL_PREAP_PROFILES[1])
   return float(np.interp(speed, ACCEL_PREAP_BP, profile))
@@ -25,9 +44,7 @@ def limit_positive_accel(request, previous, speed, personality, dt):
   """
   if request <= 0.0:
     return request
-  rise = ACCEL_RISE.get(personality_index(personality), ACCEL_RISE[1])
-  if personality_index(personality) == 2:
-    rise = float(np.interp(speed, [0.0, 11.176, 15.6464], [0.18, 0.18, 0.30]))
+  rise = positive_accel_rise(speed, personality)
   return min(request, accel_ceiling(speed, personality), max(0.0, previous) + rise * dt)
 
 
