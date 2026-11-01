@@ -1,32 +1,19 @@
-"""Default feedforward lookup table for VirtualDAS.
+"""Absolute net-acceleration pedal table fitted to recorded Pre-AP torque.
 
-Generated from the existing 3-breakpoint linear interpolation at a grid of
-(speed, accel) points. This is the fallback when no data-driven table is
-available. The generate_ff_table.py script produces a refined version from
-real drive logs.
-
-Table format: SPEED_BP × ACCEL_BP → pedal_di
-Zero-torque offset is applied at runtime (not baked into the table).
+The neutral reference and steady road load are already included. Do not add
+live learned zero-torque or a second road-load DI offset to these rows.
+Low-speed launch retains the preceding table through 5 m/s, blending by 12.
 """
-
-# Speed breakpoints (m/s) — matches PEDAL_BP from nap_conf
-SPEED_BP = [0.0, 5.0, 12.0, 20.0, 30.0, 40.0]
-
-# Acceleration breakpoints (m/s²) — from REGEN_MAX to ACCEL_MAX
-ACCEL_BP = [-1.5, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5, 2.0, 2.5]
-
-# pedal_di values: DEFAULT_TABLE[speed_idx][accel_idx]
-# Computed from: interp(accel, [REGEN_MAX, 0, ACCEL_MAX], [DI_MIN, 0, max_pedal])
-# where max_pedal = interp(speed, PEDAL_BP, PEDAL_MAX_VALUES)
-# and zero_torque_di = 0 (applied as offset at runtime)
-#
-# Each row is a speed, each column is an accel request.
-#         -1.5   -1.0   -0.5    0.0    0.5    1.0    1.5    2.0    2.5
+TABLE_REFERENCE = 'net_acceleration'
+SPEED_BP = [0.0, 5.0, 12.0, 20.0, 25.0, 30.0, 40.0]
+ACCEL_BP = [-2.5, -1.5, -1.0, -0.5, -0.2, 0.0, 0.2, 0.5, 1.0, 1.5, 2.0, 2.5]
 DEFAULT_TABLE = [
-    [-5.00, -3.33, -1.67,  0.00, 10.00, 20.00, 30.00, 40.00, 50.00],  # 0 m/s
-    [-5.00, -3.33, -1.67,  0.00, 11.60, 23.20, 34.80, 46.40, 58.00],  # 5 m/s
-    [-5.00, -3.33, -1.67,  0.00, 13.20, 26.40, 39.60, 52.80, 66.00],  # 12 m/s
-    [-5.00, -3.33, -1.67,  0.00, 14.80, 29.60, 44.40, 59.20, 74.00],  # 20 m/s
-    [-5.00, -3.33, -1.67,  0.00, 16.40, 32.80, 49.20, 65.60, 82.00],  # 30 m/s
-    [-5.00, -3.33, -1.67,  0.00, 18.00, 36.00, 54.00, 72.00, 90.00],  # 40 m/s
+  [-5.0, -5.0, -3.33, -1.67, -0.668, 0.0, 4.0, 10.0, 20.0, 30.0, 40.0, 50.0],
+  [-5.0, -5.0, -3.33, -1.50333, -0.00133, 1.0, 5.64, 12.6, 24.2, 35.8, 47.4, 58.0],
+  [-5.0, -5.0, -1.16927, 6.69513, 11.74319, 13.76382, 16.02451, 19.02276, 22.20871, 24.88658, 28.00972, 28.69238],
+  [-5.0, -5.0, -5.0, 7.82734, 12.68082, 15.41209, 17.79364, 20.77817, 24.30887, 26.96568, 29.13829, 31.3109],
+  [-5.0, -5.0, -5.0, 7.41079, 12.73242, 15.96837, 18.46769, 21.7418, 25.33054, 29.38957, 29.75167, 30.11377],
+  [-5.0, -5.0, -5.0, 7.08696, 12.76335, 16.45685, 19.31593, 22.57992, 27.66801, 31.88982, 34.24228, 35.15185],
+  [-5.0, -5.0, -2.00851, 6.81637, 12.78654, 16.88122, 20.11855, 23.30599, 30.0678, 34.15724, 39.1562, 41.08903],
 ]
+NEUTRAL_DI = [0.0, 0.0, 11.34584717352415, 12.298792951699465, 12.313543935599284, 12.316550071556351, 12.316616064400716]

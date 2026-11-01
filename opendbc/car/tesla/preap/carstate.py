@@ -23,6 +23,84 @@ _DOORS = ("DOOR_STATE_FL", "DOOR_STATE_FR", "DOOR_STATE_RL", "DOOR_STATE_RR", "D
 _resume_toggle_last_read_ms = 0
 _resume_toggle_enabled = False
 
+# NAP_FACTORY_CRUISE_EXP_SELECTOR_V1
+# Factory cruise end-button: OFF -> Normal, STANDBY -> Experimental.
+# Writes the same persistent parameter used by the on-screen button.
+import queue as _nap_exp_queue_module
+import threading as _nap_exp_threading
+from openpilot.common.params import Params as _NapExpParams
+
+_nap_exp_queue = _nap_exp_queue_module.SimpleQueue()
+_nap_exp_worker_started = False
+_nap_exp_candidate = None
+_nap_exp_candidate_since = 0.0
+_nap_exp_stable = None
+
+
+def _nap_exp_writer():
+  params = _NapExpParams()
+  while True:
+    enabled = _nap_exp_queue.get()
+    try:
+      while True:
+        enabled = _nap_exp_queue.get_nowait()
+    except _nap_exp_queue_module.Empty:
+      pass
+
+    try:
+      if params.get_bool("ExperimentalMode") != enabled:
+        params.put_bool("ExperimentalMode", enabled)
+        print("NAP cruise switch: ExperimentalMode =", enabled)
+    except Exception as exc:
+      print("NAP cruise switch parameter error:", exc)
+
+
+def _nap_cruise_exp_switch(state, parser):
+  global _nap_exp_candidate, _nap_exp_candidate_since
+  global _nap_exp_stable, _nap_exp_worker_started
+
+  now = time.monotonic()
+
+  # Only trust a valid chassis CAN parser and the two confirmed
+  # factory cruise arm states. Other states invalidate the baseline.
+  if not getattr(parser, "can_valid", False) or state not in ("OFF", "STANDBY"):
+    _nap_exp_candidate = None
+    _nap_exp_stable = None
+    return
+
+  if state != _nap_exp_candidate:
+    _nap_exp_candidate = state
+    _nap_exp_candidate_since = now
+    return
+
+  # Ignore brief transitions or CAN noise.
+  if now - _nap_exp_candidate_since < 0.30:
+    return
+
+  # At startup, learn the switch position without changing the
+  # driver's existing on-screen Experimental selection.
+  if _nap_exp_stable is None:
+    _nap_exp_stable = state
+    return
+
+  if state == _nap_exp_stable:
+    return
+
+  _nap_exp_stable = state
+
+  if not _nap_exp_worker_started:
+    worker = _nap_exp_threading.Thread(
+      target=_nap_exp_writer,
+      name="nap-cruise-exp-switch",
+      daemon=True,
+    )
+    worker.start()
+    _nap_exp_worker_started = True
+
+  _nap_exp_queue.put(state == "STANDBY")
+
+
+
 
 def _brake_throttle_resume_enabled(curr_time_ms):
   global _resume_toggle_last_read_ms, _resume_toggle_enabled
@@ -111,6 +189,7 @@ def update_preap(cs, can_parsers):
   # Cruise state
   cruise_state = cs.can_defines["DI_state"]["DI_cruiseState"].get(int(cp_chassis.vl["DI_state"]["DI_cruiseState"]), None)
   cs.di_cruise_state = cruise_state or "OFF"
+  _nap_cruise_exp_switch(cruise_state, cp_chassis)
   speed_units = cs.can_defines["DI_state"]["DI_speedUnits"].get(int(cp_chassis.vl["DI_state"]["DI_speedUnits"]), None)
 
   ret.cruiseState.available = True

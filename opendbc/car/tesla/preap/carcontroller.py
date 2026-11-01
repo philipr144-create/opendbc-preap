@@ -4,7 +4,6 @@ from opendbc.can import CANPacker
 from opendbc.car import Bus
 from opendbc.car.tesla.preap.nap_conf import nap_conf, PEDAL_DI_MIN, PEDAL_DI_ZERO
 from opendbc.car.tesla.preap.interface import get_preap_personality
-from opendbc.car.tesla.pedal.controller import get_zero_torque
 from opendbc.car.tesla.preap.virtual_das import VirtualDAS
 from opendbc.car.tesla.preap.pitch_grade_assist import OpenRoadPitchPermission
 from opendbc.car.tesla.preap.teslacan import TeslaCANPreAP
@@ -54,7 +53,7 @@ class PreAPLongController:
     # --- Engage transition ---
     requested_long_rising = (not self.prev_requested_long) and requested_long
     if requested_long_rising:
-      zero_torque_di = get_zero_torque().get(CS.out.vEgo)
+      zero_torque_di = self.vdas.ff_model.neutral(CS.out.vEgo)
       self.prev_pedal_di = max(CS.pedal_interceptor_value, zero_torque_di)
       self.vdas.reset(a_init=float(CS.out.aEgo), pedal_di_init=self.prev_pedal_di)
 
@@ -76,14 +75,8 @@ class PreAPLongController:
     if frame % 2 == 0:
       self.prev_enable_long_control = CS.enableLongControl
 
-      # Update zero-torque learning
-      if use_pedal:
-        get_zero_torque().update(
-          CS.pedal.torque_level, self.prev_pedal_di, CS.out.vEgo,
-          valid=(self.prev_preap_long_active and long_active and pedal_responding
-                 and getattr(CS.out, "canValid", False) and not CS.out.gasPressed
-                 and not getattr(CS.out, "brakePressed", False)))
-
+      # Absolute feedforward owns one calibrated neutral/load reference.
+      # Do not learn a second reference from delayed motor-torque samples.
       if pedal_engaged:
         try:
           if CS.out.gasPressed:
@@ -97,7 +90,7 @@ class PreAPLongController:
             accel_request = float(actuators.accel)
             if not self.prev_preap_long_active:
               self.prev_pedal_di = float(CS.pedal_interceptor_value)
-              self.vdas.reset(a_init=float(CS.out.aEgo), pedal_di_init=self.prev_pedal_di)
+              self.vdas.reset(a_init=accel_request, pedal_di_init=self.prev_pedal_di)
 
             self.prev_pedal_di = self.vdas.update(
               accel_request, CS.out.vEgo, self.prev_pedal_di,
@@ -109,7 +102,7 @@ class PreAPLongController:
               carlog.info("NAP actuator speed=%.3f personality=%d request=%.3f limited=%.3f motor=%.3f grade=%.3f pedal_di=%.3f zero_di=%.3f accel_slew=%d motor_slew=%d pedal_limit=%d pedal_slew=%d",
                           CS.out.vEgo, get_preap_personality(), accel_request,
                           self.vdas.jerk_limiter.a_limited, self.vdas.motor_accel,
-                          self.vdas.grade_load, self.prev_pedal_di, get_zero_torque().get(CS.out.vEgo),
+                          self.vdas.grade_load, self.prev_pedal_di, self.vdas.ff_model.neutral(CS.out.vEgo),
                           self.vdas.accel_slew_limited, self.vdas.motor_slew_limited,
                           self.vdas.pedal_limited, self.vdas.pedal_slew_limited)
             pedal_cmd = nap_conf.di_to_pedal(self.prev_pedal_di)
@@ -121,7 +114,7 @@ class PreAPLongController:
           else:
             # pedal_engaged but not long_active and not gasPressed:
             # IPC lag or transitioning. Hold at zero-torque.
-            zero_torque_di = get_zero_torque().get(CS.out.vEgo)
+            zero_torque_di = self.vdas.ff_model.neutral(CS.out.vEgo)
             hold_pedal = nap_conf.di_to_pedal(zero_torque_di)
             can_sends.append(tesla_can.create_pedal_command(hold_pedal, enable=1))
             self.prev_pedal_di = zero_torque_di

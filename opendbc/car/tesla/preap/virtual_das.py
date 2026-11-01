@@ -22,6 +22,7 @@ from opendbc.car.tesla.preap.ff_table_default import (
   SPEED_BP as FF_SPEED_BP,
   ACCEL_BP as FF_ACCEL_BP,
   DEFAULT_TABLE as FF_DEFAULT_TABLE,
+  TABLE_REFERENCE, NEUTRAL_DI,
 )
 from opendbc.car.tesla.preap.nap_conf import (
   nap_conf,
@@ -30,7 +31,6 @@ from opendbc.car.tesla.preap.nap_conf import (
   ACCEL_MAX, REGEN_MAX,
 )
 from opendbc.car.tesla.pedal.controller import (
-  get_zero_torque,
   PEDAL_RAMP_RATE_UP, PEDAL_RAMP_RATE_DOWN,
 )
 
@@ -120,47 +120,20 @@ class JerkLimiter:
     self.a_limited = a_init
 
 
-# PREAP_ROAD_LOAD_FEEDFORWARD_V1
-# Desired acceleration is vehicle acceleration, not motor acceleration.
-# Holding 0.0 m/s² at speed requires positive motor torque to overcome
-# tire and aerodynamic drag. Without this baseline, the pedal repeatedly
-# crosses the physical drive/regen boundary while holding speed.
-#
-# Values are deliberately conservative. Segment 28 required approximately
-# 9-10 DI at 55-57 mph for nearly zero net acceleration.
-ROAD_LOAD_SPEED_BP = [
-  0.0,
-  5.0,
-  12.0,
-  20.0,
-  30.0,
-  40.0,
-]
-
-ROAD_LOAD_HOLD_DI = [
-  0.0,
-  1.0,
-  3.5,
-  6.5,
-  10.0,
-  13.0,
-]
-
-# Fade road-load support smoothly during mild deceleration. At or below
-# -0.6 m/s² it is completely removed, preserving the current lead, stop,
-# overspeed, and maximum-regen authority.
-ROAD_LOAD_FADE_DECEL = -0.60
+# The absolute calibration below contains the single road-load reference.
 
 
 class FeedforwardModel:
   """2D lookup table mapping (speed, accel) → pedal_di.
 
-  Loads from a JSON file if available (produced by generate_ff_table.py),
-  otherwise falls back to the default table computed from the legacy
-  3-breakpoint interpolation. Zero-torque offset is applied at runtime.
+  The default is an absolute net-acceleration calibration fitted to this
+  car's recorded motor torque. Overrides must declare that same reference.
+  No learned neutral or second road-load offset is added at runtime.
   """
 
   def __init__(self, table_path: str = FF_TABLE_PATH):
+    self.reference = TABLE_REFERENCE
+    self.neutral_di = list(NEUTRAL_DI)
     self.speed_bp = list(FF_SPEED_BP)
     self.accel_bp = list(FF_ACCEL_BP)
     self.table = [list(row) for row in FF_DEFAULT_TABLE]
@@ -172,19 +145,28 @@ class FeedforwardModel:
     try:
       with open(path) as f:
         data = json.load(f)
-      self.speed_bp = data['speed_bp']
-      self.accel_bp = data['accel_bp']
-      self.table = data['table']
-    except (json.JSONDecodeError, KeyError, TypeError):
+      # An absolute table cannot accept a legacy relative-pedal calibration.
+      if data.get('reference') != 'net_acceleration':
+        raise ValueError('Feedforward reference must be net_acceleration')
+      speed,accel,table,neutral = (data[k] for k in ('speed_bp','accel_bp','table','neutral_di'))
+      if (not 2 <= len(speed) <= 32 or not 2 <= len(accel) <= 32
+          or len(table)!=len(speed) or len(neutral)!=len(speed)
+          or any(len(row)!=len(accel) for row in table)
+          or not all(math.isfinite(v) for v in speed+accel+neutral+sum(table,[]))
+          or any(b<=a for a,b in zip(speed,speed[1:]))
+          or any(b<=a for a,b in zip(accel,accel[1:]))
+          or any(b<a for row in table for a,b in zip(row,row[1:]))):
+        raise ValueError('Invalid absolute feedforward table')
+      self.speed_bp,self.accel_bp,self.table,self.neutral_di = speed,accel,table,neutral
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
       from opendbc.car.carlog import carlog
-      carlog.warning("vdas: failed to load FF table from %s, using defaults", path)
+      carlog.warning("vdas: incompatible/invalid absolute FF table from %s, using defaults", path)
 
   def get(self, a_cmd: float, v_ego: float, zero_torque_di: float, net_accel=None) -> float:
     """Look up pedal_di for a given (speed, accel) pair.
 
-    The table is stored with zero_torque_di=0. At runtime the learned
-    zero-torque offset shifts the result: fully applied for positive
-    accel (gas side), linearly blended to zero at max regen.
+    zero_torque_di and net_accel remain compatibility arguments only.
+    The single absolute table contains the neutral and load references.
     """
     # Bilinear interpolation: speed (outer), accel (inner)
     si = float(interp(v_ego, self.speed_bp, range(len(self.speed_bp))))
@@ -196,37 +178,15 @@ class FeedforwardModel:
     di_hi = float(interp(a_cmd, self.accel_bp, self.table[si_hi]))
     base_di = di_lo + sf * (di_hi - di_lo)
 
-    # Zero-torque shift: full at accel=0, fades to zero at both extremes.
-    # Reproduces the legacy interp where zt is the midpoint, not an additive offset.
-    if a_cmd < 0:
-      blend = float(clip((a_cmd - REGEN_MAX) / (0.0 - REGEN_MAX), 0.0, 1.0))
-    else:
-      blend = float(1.0 - a_cmd / ACCEL_MAX)
-    base_di += zero_torque_di * blend
-
-    # PREAP_ROAD_LOAD_FEEDFORWARD_V1
-    # Supply the speed-dependent torque required for zero net vehicle
-    # acceleration. Mild negative requests progressively release this
-    # torque instead of abruptly crossing into regen.
-    road_load_di = float(interp(
-      v_ego,
-      ROAD_LOAD_SPEED_BP,
-      ROAD_LOAD_HOLD_DI,
-    ))
-
-    road_load_blend = float(clip(
-      (
-        (a_cmd if net_accel is None else net_accel) - ROAD_LOAD_FADE_DECEL
-      ) / (
-        0.0 - ROAD_LOAD_FADE_DECEL
-      ),
-      0.0,
-      1.0,
-    ))
-
-    base_di += road_load_di * road_load_blend
-
+    # This table already includes the motor-neutral reference and the
+    # bounded measured road load. It consumes one acceleration command,
+    # regardless of planner source, personality, pitch or engagement state.
+    # Live neutral learning and extra DI load offsets cannot change it.
     return base_di
+
+  def neutral(self, v_ego):
+    """Zero motor torque for an inactive pedal handshake, not speed hold."""
+    return float(interp(v_ego,self.speed_bp,self.neutral_di))
 
 
 class VirtualDAS:
@@ -334,7 +294,7 @@ class VirtualDAS:
 
   def _feedforward(self, a_cmd: float, v_ego: float, net_accel=None) -> float:
     """Map acceleration to pedal DI via 2D lookup table."""
-    zero_torque_di = get_zero_torque().get(v_ego)
+    zero_torque_di = 0.  # Absolute table owns the complete reference.
     pedal_profile = nap_conf.get_pedal_profile_values()
     max_pedal_value = float(interp(v_ego, PEDAL_BP, pedal_profile))
 

@@ -23,7 +23,7 @@ class ResumeStatus:
     temp = self.path + '.tmp'
     try:
       with open(temp, 'w') as stream:
-        json.dump(dict(state, received_mono=now, expires_mono=now+.5), stream, allow_nan=False)
+        stream.write(json.dumps(dict(state, received_mono=now, expires_mono=now+.5), allow_nan=False))
       os.replace(temp, self.path)
       self.previous, self.last_write = state, now
     except (OSError, ValueError):
