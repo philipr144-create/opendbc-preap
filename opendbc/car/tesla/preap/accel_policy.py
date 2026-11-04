@@ -16,7 +16,11 @@ def positive_accel_rise(speed, personality):
   p = personality_index(personality)
   if p == 2:
     return float(np.interp(speed, [0.0, 11.176, 15.6464], [0.18, 0.18, 0.30]))
-  return .35 if p == 1 else ACCEL_RISE.get(p, .4)
+  if p == 1:
+    # Stronger Standard launch, tapering to original rate by 15 mph.
+    return float(np.interp(
+      speed, [0.0, 4.4704, 6.7056], [0.45, 0.45, 0.35]))
+  return ACCEL_RISE.get(p, .4)
 
 
 def limit_positive_output_rise(request, previous, speed, personality, dt):

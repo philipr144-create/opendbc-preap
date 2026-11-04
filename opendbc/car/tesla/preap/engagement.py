@@ -31,6 +31,7 @@ class PreAPEngagement:
     self.prev_stalk_pull_time_ms = -1000
 
     self.pedal_speed_kph = 0.0
+    self.voice_cruise_hold = False  # NAP_VOICE_HOLD_V1
     self.longCtrlEvent = None
 
     self.preap_cc_cancel_needed = False
@@ -115,6 +116,10 @@ class PreAPEngagement:
     self.preap_cc_cancel_needed = False
     self.preap_cc_engage_needed = False
 
+    # A new longitudinal engagement session releases any voice speed hold.
+    if not self.enableLongControl:
+      self.voice_cruise_hold = False
+
     # MAIN button: rising edge only
     if cruise_buttons == CruiseButtons.MAIN and prev_cruise_buttons != CruiseButtons.MAIN:
       self.clear_brake_resume()
@@ -155,6 +160,7 @@ class PreAPEngagement:
       if brake_rising_edge and self.cruiseEnabled and self.enableLongControl:
         carlog.debug("BRAKE rising edge — dropping longitudinal")
         self.resume_target_kph = self.pedal_speed_kph
+        self.voice_cruise_hold = False  # End voice hold when long pauses.
         self.brake_paused_long = True
         self.resume_ready_for_press = False
         self.resume_press_ms = 0
@@ -165,8 +171,10 @@ class PreAPEngagement:
         self.longCtrlEvent = "pccDisabled"
     self.preap_brake_pressed_prev = real_brake_pressed
 
+    # MPP remains active, but cannot replace a voice-held manual target.
+    # NAP_VOICE_HOLD_V1
     # Auto-update target speed when speed limit changes while driving
-    if use_pedal and self.enableLongControl:
+    if use_pedal and self.enableLongControl and not self.voice_cruise_hold:
       try:
         import os
         if os.path.exists("/dev/shm/mpp_speed_limit"):
@@ -181,7 +189,52 @@ class PreAPEngagement:
       except Exception:
         pass
 
+    # Consume voice requests after MPP and physical-stalk processing.
+    # A physical stalk input in the same frame wins over the request.
+    if cruise_buttons == prev_cruise_buttons:
+      self._consume_voice_speed_request(use_pedal, real_brake_pressed)
+
     return button_events
+
+  def _consume_voice_speed_request(self, use_pedal, real_brake_pressed):
+    # NAP_VOICE_HOLD_V1. A one-shot request, never a second speed writer.
+    import json
+    import os
+    import time
+    from pathlib import Path
+    request_path = Path('/dev/shm/nap_voice_cruise_request.json')
+    ack_path = Path('/dev/shm/nap_voice_cruise_ack.json')
+    try:
+      raw = request_path.read_text()
+    except FileNotFoundError:
+      return
+    except OSError:
+      return
+    try:
+      request_path.unlink(missing_ok=True)
+      req = json.loads(raw)
+      speed = req.get('mph')
+      request_id = req.get('id')
+      created_ns = req.get('created_monotonic_ns')
+      valid = (isinstance(request_id, str) and len(request_id) == 32
+               and type(speed) is int and 5 <= speed <= 85
+               and type(created_ns) is int
+               and 0 <= time.monotonic_ns() - created_ns <= 8_000_000_000)
+      accepted = bool(valid and use_pedal and self.enableLongControl and self.cruiseEnabled
+                      and not real_brake_pressed)
+      if accepted:
+        self.pedal_speed_kph = speed * CV.MPH_TO_KPH
+        self.voice_cruise_hold = True
+      ack = {'id': request_id, 'applied': accepted,
+             'status': 'applied' if accepted else 'rejected',
+             'requested_mph': speed if valid else None,
+             'active_hold': bool(self.voice_cruise_hold),
+             'actual_kph': round(self.pedal_speed_kph, 2) if accepted else None}
+      temp = ack_path.with_suffix('.tmp')
+      temp.write_text(json.dumps(ack))
+      os.replace(temp, ack_path)
+    except (ValueError, TypeError, OSError):
+      return
 
   def check_can_engage(self, door_open, gear_shifter, seatbelt_unlatched):
     """Check engagement prerequisites. Resets state if blocked."""

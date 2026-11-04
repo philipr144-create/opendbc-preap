@@ -1,6 +1,7 @@
 """One-shot Pre-AP tap requests and signal ownership. No steering tuning."""
 
 import json
+import hashlib
 import math
 import os
 import time
@@ -322,6 +323,8 @@ class NavigationSignalController:
     self.status = Snapshot(status_path)
     self.direction = 0
     self.request_key = None
+    self.request_identity = None
+    self.cancelled_maneuvers = set()
     self.held_sent = False
     self.cleanup = deque()
     self.cleanup_deadline = 0.0
@@ -339,21 +342,40 @@ class NavigationSignalController:
       self.cleanup.clear()
     self.direction = 0
     self.request_key = None
+    self.request_identity = None
     self.held_sent = False
+    self.last_tx_time = -math.inf
 
   def update(self, stalk, cs, *, lateral_active, overriding, existing=(), now=None):
     now = time.monotonic() if now is None else now
     request = self.request.read(now)
     requested_direction = request.get("direction") if request is not None else 0
-    request_key = request.get("maneuver_id") if request is not None else None
+    request_key = request.get("request_key") if request is not None else None
+    identity=tuple(request.get(k) for k in ('controller','route_id','maneuver_id')) if request else ()
+    identity_valid=(len(identity)==3 and all(isinstance(v,str) and 0<len(v)<=96 for v in identity))
+    if identity_valid:
+      identity_valid=request_key==hashlib.sha256(('|'.join(identity)).encode()).hexdigest()[:32]
+    stationary=(request is not None and request.get('stationary_wait_allowed') is True
+                and math.isfinite(cs.vEgo) and 0<=cs.vEgo<=.3
+                and str(cs.gearShifter) in ('drive','low','sport','eco'))
+    maneuver = identity[1:] if identity_valid else None
+    # Keep cancellation across cleanup, stale snapshots, and renewed leases.
+    # A different controller token cannot revive the same route step.
+    if overriding:
+      if self.request_identity is not None:
+        self.cancelled_maneuvers.add(self.request_identity[1:])
+      if maneuver is not None and request.get('active') is True:
+        self.cancelled_maneuvers.add(maneuver)
     requested = (
       request is not None
-      and request.get("active") is True
-      and requested_direction in (1, 2)
+      and request.get("active") is True and type(request.get('version')) is int and request.get('version')==2
+      and request.get('signal_owner')=='navigation' and request.get('cadence_mode')=='factory'
+      and identity_valid and type(requested_direction) is int and requested_direction in (1, 2)
       and isinstance(request_key, str)
       and bool(request_key)
       and cs.canValid
-      and lateral_active
+      and (lateral_active or stationary) and not overriding
+      and maneuver not in self.cancelled_maneuvers
     )
 
     physical_input = (
@@ -366,18 +388,21 @@ class NavigationSignalController:
     elif not requested:
       if self.direction:
         self._stop(now)
-    elif self.direction and (requested_direction != self.direction or request_key != self.request_key):
+    elif self.direction and (requested_direction != self.direction or request_key != self.request_key or identity != self.request_identity):
       self._stop(now)
 
     if requested and not physical_input and not self.cleanup and not self.direction:
       self.direction = requested_direction
       self.request_key = request_key
+      self.request_identity = identity
 
     if self.cleanup and now > self.cleanup_deadline:
       self.cleanup.clear()
 
     sends = []
     free_bus = not any(msg[0] == 0x45 for msg in existing)
+    if not free_bus and self.direction:
+      self._stop(now)
     if (
       cs.canValid
       and stalk.fresh(now)
@@ -401,6 +426,7 @@ class NavigationSignalController:
       self.last_tx_time = now
     blocked = (
       'no fresh model request' if request is None else
+      'maneuver cancelled by driver takeover' if maneuver in self.cancelled_maneuvers else
       'request inactive' if not requested else
       'physical stalk or cruise input' if physical_input else
       'CAN or stalk data unavailable' if not cs.canValid or not stalk.fresh(now) or stalk.raw is None else
@@ -417,7 +443,10 @@ class NavigationSignalController:
         "held_sent": self.held_sent,
         "block_reason": blocked,
         "direction": self.direction,
-        "maneuver_id": self.request_key or "",
+        "maneuver_id": self.request_identity[2] if self.request_identity else "",
+        "route_id": self.request_identity[1] if self.request_identity else "",
+        "controller": self.request_identity[0] if self.request_identity else "",
+        "request_key": self.request_key or "", "cadence_mode": "factory",
         "cleanup": bool(self.cleanup),
         "physical_override": physical_input,
         "request_valid": request is not None,
