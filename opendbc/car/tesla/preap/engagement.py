@@ -10,8 +10,8 @@ ButtonType = structs.CarState.ButtonEvent.Type
 # Echo filter windows: suppress auto-cancel echoes from spoofed stalk messages
 CANCEL_ECHO_WINDOW_MS = 600
 SPOOF_ECHO_WINDOW_MS = 300
-# Brake + throttle resume: acknowledge a fresh press at all normal cruising speeds
-RESUME_MAX_SPEED_MS = 45.0  # ~100 mph
+# Brake + throttle resume: acknowledge a fresh press only at or below 20 mph
+RESUME_MAX_SPEED_MS = 20.0 * 0.44704  # 20 mph (approx 8.94 m/s)
 
 
 class PreAPEngagement:
