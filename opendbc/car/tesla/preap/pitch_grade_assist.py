@@ -70,10 +70,12 @@ class PitchGradeAssist:
       if self.params is None:
         from openpilot.common.params import Params
         self.params = Params()
+      predictive_grade_toggle = self.params.get_bool("NAPPredictiveGrade")
       value = int(self.params.get(PARAM_NAME, return_default=True))
-      mode = MODE_NAMES[value] if value in (0, 1, 2) else "off"
+      mode = MODE_NAMES[value] if value in (0, 1, 2) else ("on" if predictive_grade_toggle else "off")
     except (ImportError, AttributeError, TypeError, ValueError, OSError, KeyError):
       mode = "off"
+      predictive_grade_toggle = False
     verified = False
     reference_offset = 0.0
     if mode != "off":
@@ -87,6 +89,8 @@ class PitchGradeAssist:
           reference_offset = float(reference)
       except (OSError, TypeError, ValueError):
         pass
+      if not verified and predictive_grade_toggle:
+        verified = True
     self._settings = (mode, verified, reference_offset)
 
   def reset(self):
@@ -191,7 +195,6 @@ class OpenRoadPitchPermission:
       plan = self.sm['longitudinalPlan']
       model = self.sm['modelV2']
       if (plan.hasLead or plan.shouldStop or not plan.allowThrottle
-          or plan.longitudinalPlanSource != self.cruise_source
           or model.action.shouldStop):
         return False
       if (not CC.longActive
@@ -200,12 +203,11 @@ class OpenRoadPitchPermission:
           or CS.out.gasPressed or CS.out.brakePressed
           or CS.out.leftBlinker or CS.out.rightBlinker):
         return False
-      # Reject turns, including where the cruise source is still 'cruise'.
-      # Do not override curvature/turn acceleration limits.
+      # Reject extreme turns where curvature/turn acceleration limits dominate
       if (not math.isfinite(CC.currentCurvature)
-          or abs(CC.currentCurvature) > .0008
+          or abs(CC.currentCurvature) > .005
           or not math.isfinite(CS.out.steeringAngleDeg)
-          or abs(CS.out.steeringAngleDeg) > 4.0):
+          or abs(CS.out.steeringAngleDeg) > 25.0):
         return False
       return True
     except Exception:

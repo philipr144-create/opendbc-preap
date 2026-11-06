@@ -71,10 +71,9 @@ class TestPreAPBrakeDisengage(unittest.TestCase):
           step(2200, gas=True, enabled=False)
           step(2300)
         elif case == "fast":
-          # Resume tap must START at or below 10 mph.
-          # 5.0 m/s = 11.18 mph, so this gesture must be rejected.
-          step(2200, gas=True, speed=5.0)
-          step(2300, speed=5.0)
+          # Exceeds maximum highway speed (45 m/s = 100.6 mph)
+          step(2200, gas=True, speed=50.0)
+          step(2300, speed=50.0)
         elif case == "stale_pedal":
           step(2200, gas=True, healthy=False)
           step(2300)
@@ -85,6 +84,55 @@ class TestPreAPBrakeDisengage(unittest.TestCase):
           step(2200, gas=True)
           step(4800)
         self.assertFalse(eng.enableLongControl)
+
+  def test_brake_resume_at_highway_speed(self):
+    eng = self._make_engagement()
+    self._engage_single_pull(eng)
+    eng.pedal_speed_kph = 100.0
+    # Brake drops longitudinal at 25 m/s (~56 mph)
+    eng.process_buttons(0, 0, 2000, 25.0, "KPH", True, True, True, True)
+    self.assertTrue(eng.brake_paused_long)
+    self.assertFalse(eng.enableLongControl)
+    # Release brake and tap gas at highway speed
+    resumed = eng.process_brake_resume(2100, 24.5, False, True, True, True, True, True)
+    self.assertTrue(resumed)
+    self.assertTrue(eng.enableLongControl)
+    self.assertFalse(eng.brake_paused_long)
+    self.assertEqual(eng.pedal_speed_kph, 100.0)
+
+  def test_brake_resume_pedal_overlap_buffering(self):
+    eng = self._make_engagement()
+    self._engage_single_pull(eng)
+    eng.process_buttons(0, 0, 2000, 0.0, "KPH", True, True, True, True)
+    # Driver begins pressing gas while brake is still releasing (overlap)
+    eng.process_brake_resume(2050, 0.0, True, True, True, True, True, True)
+    self.assertFalse(eng.enableLongControl)
+    # Brake fully releases 50ms later with gas still held
+    resumed = eng.process_brake_resume(2100, 0.0, False, True, True, True, True, True)
+    self.assertTrue(resumed)
+    self.assertTrue(eng.enableLongControl)
+
+  def test_stalk_single_pull_resume_after_brake(self):
+    eng = self._make_engagement(double_pull=True)
+    # Double-pull initial engagement
+    eng.process_buttons(2, 0, 1000, 15.0, "KPH", True, True, True, False)
+    eng.process_buttons(2, 0, 1400, 15.0, "KPH", True, True, True, False)
+    self.assertTrue(eng.cruiseEnabled)
+    self.assertTrue(eng.enableLongControl)
+    eng.pedal_speed_kph = 80.0
+    # Brake
+    eng.process_buttons(0, 0, 2000, 15.0, "KPH", True, True, True, True)
+    self.assertTrue(eng.brake_paused_long)
+    self.assertFalse(eng.enableLongControl)
+    # Driver releases brake, then pulls cruise stalk once (MAIN rising edge)
+    eng.process_buttons(
+      cruise_buttons=2, prev_cruise_buttons=0,
+      curr_time_ms=2100, v_ego=14.0, speed_units="KPH",
+      use_pedal=True, pedal_long_allowed=True,
+      long_control_allowed=True, real_brake_pressed=False)
+    self.assertTrue(eng.enableLongControl)
+    self.assertFalse(eng.brake_paused_long)
+    self.assertEqual(eng.pedal_speed_kph, 80.0)
 
   def test_brake_no_effect_without_pedal(self):
     # In non-pedal mode (stock CC only), brake doesn't trigger any action

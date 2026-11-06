@@ -44,6 +44,10 @@ class NAPParamKeys:
   NAVIGATION_MANEUVERS = "NAPNavigationManeuvers"
   MAP_DRIVING_ASSIST = "NAPMapDrivingAssist"
   CORNER_ASSIST = "NAPCornerAssist"
+  TURN_PROPULSION_ASSIST = "NAPTurnPropulsionAssist"
+  HIGHWAY_EXIT_ASSIST = "NAPHighwayExitAssist"
+  PREDICTIVE_GRADE = "NAPPredictiveGrade"
+  ANTICIPATORY_SPEED_LIMITS = "NAPAnticipatorySpeedLimits"
 
   # Advanced / Developer
   FORCE_PRE_AP = "NAPForcePreAP"
@@ -55,7 +59,7 @@ DEFAULTS = {
   NAPParamKeys.TAP_LANE_CHANGE: False,
   NAPParamKeys.ADAPTIVE_ACCEL: True,
   NAPParamKeys.PEDAL_ENABLED: False,
-  NAPParamKeys.BRAKE_THROTTLE_RESUME: False,
+  NAPParamKeys.BRAKE_THROTTLE_RESUME: True,
   NAPParamKeys.FOLLOW_DISTANCE: 4,
   NAPParamKeys.PEDAL_PROFILE: 4,
   NAPParamKeys.PEDAL_CAN_BUS: 2,
@@ -79,5 +83,9 @@ DEFAULTS = {
   NAPParamKeys.NAVIGATION_MANEUVERS: True,
   NAPParamKeys.MAP_DRIVING_ASSIST: False,
   NAPParamKeys.CORNER_ASSIST: True,
+  NAPParamKeys.TURN_PROPULSION_ASSIST: True,
+  NAPParamKeys.HIGHWAY_EXIT_ASSIST: True,
+  NAPParamKeys.PREDICTIVE_GRADE: True,
+  NAPParamKeys.ANTICIPATORY_SPEED_LIMITS: True,
   NAPParamKeys.PARKED_SIGNAL_TEST: False,
 }

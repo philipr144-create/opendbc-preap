@@ -10,9 +10,8 @@ ButtonType = structs.CarState.ButtonEvent.Type
 # Echo filter windows: suppress auto-cancel echoes from spoofed stalk messages
 CANCEL_ECHO_WINDOW_MS = 600
 SPOOF_ECHO_WINDOW_MS = 300
-# Brake + throttle resume: acknowledge a fresh press below this speed.
-# Driver gas remains passthrough until release; acknowledgment is not actuation.
-RESUME_MAX_SPEED_MS = 10.0 / 2.236936
+# Brake + throttle resume: acknowledge a fresh press at all normal cruising speeds
+RESUME_MAX_SPEED_MS = 45.0  # ~100 mph
 
 
 class PreAPEngagement:
@@ -48,11 +47,13 @@ class PreAPEngagement:
     self.resume_press_ms = 0
     self.resume_prev_gas_pressed = False
     self.resume_sequence = 0
+    self.pending_gas_resume_ms = 0
 
   def clear_brake_resume(self):
     self.brake_paused_long = False
     self.resume_ready_for_press = False
     self.resume_press_ms = 0
+    self.pending_gas_resume_ms = 0
 
   def process_brake_resume(self, curr_time_ms, v_ego, real_brake_pressed,
                            gas_pressed, pedal_available, pedal_long_allowed,
@@ -67,18 +68,39 @@ class PreAPEngagement:
       if not self.brake_paused_long:
         self.resume_ready_for_press = False
         self.resume_press_ms = 0
+        self.pending_gas_resume_ms = 0
         return False
 
-      if real_brake_pressed or not pedal_available or not math.isfinite(v_ego) or v_ego < -0.1:
+      # Track brake release edge and buffer gas presses during foot transition
+      if real_brake_pressed:
+        if gas_pressed:
+          self.pending_gas_resume_ms = curr_time_ms
         self.resume_ready_for_press = False
         self.resume_press_ms = 0
         return False
 
-      if gas_rising and not self.enableLongControl and v_ego <= RESUME_MAX_SPEED_MS:
+      if not pedal_available or not math.isfinite(v_ego) or v_ego < -0.1:
+        self.resume_ready_for_press = False
+        self.resume_press_ms = 0
+        self.pending_gas_resume_ms = 0
+        return False
+
+      # Acknowledge fresh gas tap, active gas after release, or buffered transition tap (< 350ms)
+      gas_resume = gas_rising or (gas_pressed and curr_time_ms - self.last_stalk_non_cancel_ms > 200)
+      if not gas_resume and self.pending_gas_resume_ms > 0:
+        if curr_time_ms - self.pending_gas_resume_ms <= 350:
+          gas_resume = True
+      self.pending_gas_resume_ms = 0
+
+      if gas_resume and not self.enableLongControl and v_ego <= RESUME_MAX_SPEED_MS:
         self.enableLongControl = True
         self.enableJustCC = False
         if self.resume_target_kph > 0:
-          self.pedal_speed_kph = self.resume_target_kph
+          speed_uom_kph = CV.MPH_TO_KPH
+          actual_kph = int(v_ego * CV.MS_TO_KPH / speed_uom_kph + 0.5) * speed_uom_kph
+          self.pedal_speed_kph = max(self.resume_target_kph, actual_kph) if v_ego >= 5.0 else self.resume_target_kph
+        else:
+          self.pedal_speed_kph = int(v_ego * CV.MS_TO_KPH)
         self.longCtrlEvent = "pccEnabled"
         self.brake_paused_long = False
         self.resume_sequence += 1
@@ -119,6 +141,29 @@ class PreAPEngagement:
     # A new longitudinal engagement session releases any voice speed hold.
     if not self.enableLongControl:
       self.voice_cruise_hold = False
+
+    # Brake-pause resume via stalk: single pull MAIN or flick UP/DOWN immediately unpauses longitudinal
+    if self.brake_paused_long and self.cruiseEnabled and not real_brake_pressed:
+      stalk_resume_gesture = (
+        (cruise_buttons == CruiseButtons.MAIN and prev_cruise_buttons != CruiseButtons.MAIN)
+        or (CruiseButtons.is_accel(cruise_buttons) and prev_cruise_buttons != cruise_buttons)
+        or (CruiseButtons.is_decel(cruise_buttons) and prev_cruise_buttons != cruise_buttons)
+      )
+      if stalk_resume_gesture:
+        carlog.debug("STALK resume from brake-pause (button=%s)", cruise_buttons)
+        self.enableLongControl = long_control_allowed
+        self.enableJustCC = not long_control_allowed
+        self.brake_paused_long = False
+        self.pending_enable = False
+        if pedal_long_allowed:
+          self.longCtrlEvent = "pccEnabled"
+          if self.resume_target_kph > 0:
+            speed_uom_kph = CV.MPH_TO_KPH if speed_units == "MPH" else 1.0
+            actual_kph = int(v_ego * CV.MS_TO_KPH / speed_uom_kph + 0.5) * speed_uom_kph
+            self.pedal_speed_kph = max(self.resume_target_kph, actual_kph) if v_ego >= 5.0 else self.resume_target_kph
+          else:
+            self.pedal_speed_kph = self._capture_target_speed(v_ego, speed_units)
+        return button_events
 
     # MAIN button: rising edge only
     if cruise_buttons == CruiseButtons.MAIN and prev_cruise_buttons != CruiseButtons.MAIN:
