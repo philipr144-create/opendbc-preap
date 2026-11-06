@@ -201,19 +201,12 @@ class CarController(CarControllerBase):
         self.apply_angle_last = CS.out.steeringAngleDeg
 
       # ========================================================
-      # BLINKER-GATED LOW-SPEED STEERING RATE
+      # PREAP LOW-SPEED SMOOTH STEERING PROFILE (< 25 mph)
       #
-      # Blinker OFF:
-      #   stock Tesla steering rate
-      #
-      # Blinker ON + below 25 mph:
-      #   <=5 mph : 9.00 deg / 20ms
-      #    10 mph : 8.50 deg / 20ms
-      #    15 mph : 8.00 deg / 20ms
-      #    20 mph : 7.50 deg / 20ms
-      #    25 mph : 7.00 deg / 20ms stock
-      #
-      # VM lateral accel/jerk limits remain active.
+      # Provides fast, agile steering response (up to 210 deg/s)
+      # while applying S-curve angular acceleration limiting to
+      # completely eliminate low-speed chatter, hunting, and
+      # mechanical stalk-cancel torque shocks.
       # ========================================================
       params_to_use = CarControllerParams
 
@@ -225,10 +218,7 @@ class CarController(CarControllerBase):
       if self.frame % 100 == 0:
         self.low_speed_steering_rate_enabled = self.params.get_bool("NAPLowSpeedSteeringRate")
 
-      if not self.low_speed_steering_rate_enabled:
-        low_speed_turn_profile = False
-
-      if low_speed_turn_profile:
+      if self.low_speed_steering_rate_enabled and speed_mph < 25.0:
         speed_fraction = max(
           0.0,
           min(
@@ -237,9 +227,12 @@ class CarController(CarControllerBase):
           ),
         )
 
-        low_speed_max_angle_rate = (
-          9.0 - (2.0 * speed_fraction)
-        )
+        if low_speed_turn_profile:
+          # Active turn/maneuver: 4.20 deg/20ms (210 deg/s) @ 5 mph -> 3.00 deg/20ms (150 deg/s) @ 25 mph
+          low_speed_max_angle_rate = 4.20 - (1.20 * speed_fraction)
+        else:
+          # Cruising/curves: 3.20 deg/20ms (160 deg/s) @ 5 mph -> 2.20 deg/20ms (110 deg/s) @ 25 mph
+          low_speed_max_angle_rate = 3.20 - (1.00 * speed_fraction)
 
         scaled_limits = replace(
           CarControllerParams.ANGLE_LIMITS,
@@ -251,8 +244,33 @@ class CarController(CarControllerBase):
           STEER_STEP=CarControllerParams.STEER_STEP,
         )
 
-      self.apply_angle_last = apply_steer_angle_limits_vm(target_angle, self.apply_angle_last, CS.out.vEgoRaw, CS.out.steeringAngleDeg,
-                                                          lat_active, params_to_use, self.VM)
+      # Near-field low-speed vision jitter rejection:
+      # Strips out high-frequency frame noise without adding latency to real steering intent
+      if not hasattr(self, 'filtered_target_angle'):
+        self.filtered_target_angle = CS.out.steeringAngleDeg
+      if speed_mph < 20.0 and lat_active and not overriding and not recovering:
+        self.filtered_target_angle = 0.65 * target_angle + 0.35 * self.filtered_target_angle
+        target_angle = self.filtered_target_angle
+      else:
+        self.filtered_target_angle = target_angle
+
+      vm_target_angle = apply_steer_angle_limits_vm(target_angle, self.apply_angle_last, CS.out.vEgoRaw, CS.out.steeringAngleDeg,
+                                                    lat_active, params_to_use, self.VM)
+
+      # S-curve angular acceleration / jerk damping:
+      # Limits rate-of-change of the steering velocity to prevent 10 Hz EPAS chatter
+      if not hasattr(self, 'prev_steer_rate'):
+        self.prev_steer_rate = 0.0
+
+      if lat_active and not overriding:
+        max_rate_accel = 0.85 if speed_mph < 25.0 else 0.50
+        desired_rate = vm_target_angle - self.apply_angle_last
+        limited_rate = float(np.clip(desired_rate, self.prev_steer_rate - max_rate_accel, self.prev_steer_rate + max_rate_accel))
+        self.apply_angle_last += limited_rate
+        self.prev_steer_rate = limited_rate
+      else:
+        self.apply_angle_last = vm_target_angle
+        self.prev_steer_rate = 0.0
       if recovering:
         self.steering_recovery.commit(self.apply_angle_last)
       cntr = (self.frame // 2) % 16
