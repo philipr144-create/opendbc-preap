@@ -401,5 +401,25 @@ class TestNoPedalUpDownPassthrough(unittest.TestCase):
     self.assertEqual(eng.pedal_speed_kph, 0.0)
 
 
+  def test_mpp_speed_limit_preserves_driver_offset(self):
+    eng = PreAPEngagement(double_pull_enabled=False, double_pull_window_ms=750)
+    eng.cruiseEnabled = True
+    eng.enableLongControl = True
+    eng.pedal_speed_kph = 91.7  # 57 mph (55 mph limit + 2 mph offset)
+    eng.last_mpp_limit_mps = 24.587  # 55 mph
+
+    with open("/dev/shm/mpp_speed_limit", "w") as f:
+      f.write("20.1168")
+
+    # Process step
+    eng.process_buttons(
+      cruise_buttons=0, prev_cruise_buttons=0, curr_time_ms=1000,
+      v_ego=24.0, speed_units="MPH", use_pedal=True, pedal_long_allowed=True,
+      long_control_allowed=True, real_brake_pressed=False, di_cruise_state="ENABLED")
+
+    # Promptly updates to 75.6 km/h (45 mph + 2 mph offset = 47 mph)
+    self.assertAlmostEqual(eng.pedal_speed_kph, 75.6, places=1)
+
+
 if __name__ == "__main__":
   unittest.main()

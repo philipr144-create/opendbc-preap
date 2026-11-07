@@ -229,8 +229,14 @@ class PreAPEngagement:
             if limit_mps > 0:
               if not hasattr(self, "last_mpp_limit_mps"): self.last_mpp_limit_mps = 0.0
               if limit_mps != self.last_mpp_limit_mps:
+                new_limit_kph = round((limit_mps * 2.236936) * 1.609344, 1)
+                offset_kph = 0.0
+                if self.last_mpp_limit_mps > 0 and self.pedal_speed_kph > 0:
+                  old_limit_kph = round((self.last_mpp_limit_mps * 2.236936) * 1.609344, 1)
+                  offset_kph = max(0.0, self.pedal_speed_kph - old_limit_kph)
                 self.last_mpp_limit_mps = limit_mps
-                self.pedal_speed_kph = round((limit_mps * 2.236936) * 1.609344, 1)
+                # Instant set speed update with offset preservation (decisive prompt slowdown if not predicted in advance)
+                self.pedal_speed_kph = round(new_limit_kph + offset_kph, 1)
       except Exception:
         pass
 
